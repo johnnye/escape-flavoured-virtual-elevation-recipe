@@ -768,11 +768,6 @@ def main():
 
     # Other parameters
     parser.add_argument(
-        "--velodrome",
-        action="store_true",
-        help="Set to true if recording was done in a velodrome (forces elevation to zero)",
-    )
-    parser.add_argument(
         "--r2-weight",
         type=float,
         default=0.5,
@@ -818,13 +813,6 @@ def main():
         )
         return None
 
-    # Override R2 weight for velodrome mode if not explicitly provided
-    if args.velodrome and "--r2-weight" not in sys.argv:
-        args.r2_weight = 0.0  # Use only RMSE for velodrome
-        print(
-            "Velodrome mode: Setting R² weight to 0 (using only RMSE for optimization)"
-        )
-
     # Create output directory
     os.makedirs(args.output, exist_ok=True)
 
@@ -844,9 +832,6 @@ def main():
     if args.trim_distance > 0 and args.trim_start is None and args.trim_end is None:
         print(f"Trim distance: {args.trim_distance} meters from start and end")
 
-    if args.velodrome:
-        print("Velodrome mode: Forcing elevation to zero")
-
     print(f"R² weight: {args.r2_weight}")
     print(f"Grid points: {args.grid_points}")
     print(f"CdA bounds: {cda_bounds}")
@@ -864,11 +849,6 @@ def main():
 
     if df is None or lap_messages is None:
         return None
-
-    # Apply velodrome mode if requested
-    if args.velodrome:
-        df["elevation"] = 1.0
-        print("Applied velodrome mode: Set all elevation values to zero")
 
     # Check if we should analyze specific laps together
     if args.selected_laps:
