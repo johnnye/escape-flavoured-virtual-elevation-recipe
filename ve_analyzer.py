@@ -182,6 +182,8 @@ def analyze_lap_data(
     fixed_cda=None,
     fixed_crr=None,
     trim_distance=0,
+    trim_start=None,
+    trim_end=None,
     r2_weight=0.5,
     n_grid=250,
     cda_bounds=(0.1, 0.5),
@@ -296,17 +298,29 @@ def analyze_lap_data(
         resampled_df["a"] = accel_calc(resampled_df["v"].values, dt)
 
         # Calculate distance for trimming
-        if trim_distance > 0:
+        if trim_distance > 0 or trim_start is not None or trim_end is not None:
             # Calculate distance
             distance = calculate_distance(resampled_df, dt)
-            # Apply trimming
-            resampled_df = trim_data_by_distance(resampled_df, distance, trim_distance)
+            # Apply trimming with prioritized individual trim values
+            resampled_df = trim_data_by_distance(
+                resampled_df, distance, trim_distance, trim_start, trim_end
+            )
             if len(resampled_df) < 10:
                 print(
                     f"  Skipping lap {lap_num}: Not enough data points after trimming ({len(resampled_df)})"
                 )
                 continue
-            print(f"  Trimmed {trim_distance}m from start and end of lap")
+
+            # Determine what was actually trimmed for logging
+            if trim_start is not None:
+                print(f"  Trimmed {trim_start}m from start of lap")
+            elif trim_distance > 0:
+                print(f"  Trimmed {trim_distance}m from start of lap")
+
+            if trim_end is not None:
+                print(f"  Trimmed {trim_end}m from end of lap")
+            elif trim_distance > 0 and trim_start is None:
+                print(f"  Trimmed {trim_distance}m from end of lap")
 
         # Run analysis
         save_path = None
@@ -391,6 +405,8 @@ def analyze_combined_laps(
     fixed_cda=None,
     fixed_crr=None,
     trim_distance=0,
+    trim_start=None,
+    trim_end=None,
     r2_weight=0.5,
     n_grid=250,
     cda_bounds=(0.1, 0.5),
@@ -518,15 +534,27 @@ def analyze_combined_laps(
     combined_df["a"] = a_values
 
     # Apply distance trimming if requested
-    if trim_distance > 0:
+    if trim_distance > 0 or trim_start is not None or trim_end is not None:
         # Calculate distance
         distance = calculate_distance(combined_df, dt)
-        # Apply trimming
-        combined_df = trim_data_by_distance(combined_df, distance, trim_distance)
+        # Apply trimming with prioritized individual trim values
+        combined_df = trim_data_by_distance(
+            combined_df, distance, trim_distance, trim_start, trim_end
+        )
         if len(combined_df) < 10:
             print(f"Not enough data points after trimming ({len(combined_df)})")
             return None
-        print(f"Trimmed {trim_distance}m from start and end of recording")
+
+        # Determine what was actually trimmed for logging
+        if trim_start is not None:
+            print(f"Trimmed {trim_start}m from start of recording")
+        elif trim_distance > 0:
+            print(f"Trimmed {trim_distance}m from start of recording")
+
+        if trim_end is not None:
+            print(f"Trimmed {trim_end}m from end of recording")
+        elif trim_distance > 0 and trim_start is None:
+            print(f"Trimmed {trim_distance}m from end of recording")
 
     # Run analysis
     save_path = None
@@ -718,13 +746,27 @@ def main():
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
 
-    # New parameters
+    # Trimming parameters
     parser.add_argument(
         "--trim-distance",
         type=float,
         default=0,
         help="Distance in meters to trim from start and end of recording (default: 0)",
     )
+    parser.add_argument(
+        "--trim-start",
+        type=float,
+        default=None,
+        help="Distance in meters to trim from start of recording (overrides --trim-distance for start)",
+    )
+    parser.add_argument(
+        "--trim-end",
+        type=float,
+        default=None,
+        help="Distance in meters to trim from end of recording (overrides --trim-distance for end)",
+    )
+
+    # Other parameters
     parser.add_argument(
         "--velodrome",
         action="store_true",
@@ -793,7 +835,14 @@ def main():
     print(f"Resampling: {args.resample}")
     print(f"Output directory: {args.output}")
     print(f"Minimum lap duration: {args.min_lap} seconds")
-    print(f"Trim distance: {args.trim_distance} meters from start and end")
+
+    # Print trimming parameters
+    if args.trim_start is not None:
+        print(f"Trim start: {args.trim_start} meters")
+    if args.trim_end is not None:
+        print(f"Trim end: {args.trim_end} meters")
+    if args.trim_distance > 0 and args.trim_start is None and args.trim_end is None:
+        print(f"Trim distance: {args.trim_distance} meters from start and end")
 
     if args.velodrome:
         print("Velodrome mode: Forcing elevation to zero")
@@ -841,6 +890,8 @@ def main():
                 fixed_cda=args.cda,
                 fixed_crr=args.crr,
                 trim_distance=args.trim_distance,
+                trim_start=args.trim_start,
+                trim_end=args.trim_end,
                 r2_weight=args.r2_weight,
                 n_grid=args.grid_points,
                 cda_bounds=cda_bounds,
@@ -883,6 +934,8 @@ def main():
         fixed_cda=args.cda,
         fixed_crr=args.crr,
         trim_distance=args.trim_distance,
+        trim_start=args.trim_start,
+        trim_end=args.trim_end,
         r2_weight=args.r2_weight,
         n_grid=args.grid_points,
         cda_bounds=cda_bounds,

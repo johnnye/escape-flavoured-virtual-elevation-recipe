@@ -26,42 +26,52 @@ def resample_data(df, resample_freq="1s"):
     return resampled_df
 
 
-def trim_data_by_distance(df, distance, trim_distance):
+def trim_data_by_distance(
+    df, distance, trim_distance=0, trim_start=None, trim_end=None
+):
     """
     Trim data from the start and end based on distance.
 
     Args:
         df (pandas.DataFrame): DataFrame containing cycling data
         distance (numpy.ndarray): Distance data in meters
-        trim_distance (float): Distance in meters to trim from start and end
+        trim_distance (float): Distance in meters to trim from both start and end (if trim_start/trim_end not provided)
+        trim_start (float): Distance in meters to trim from start (overrides trim_distance for start)
+        trim_end (float): Distance in meters to trim from end (overrides trim_distance for end)
 
     Returns:
         pandas.DataFrame: Trimmed DataFrame
     """
-    if trim_distance <= 0:
+    # Use trim_start and trim_end if provided, otherwise fall back to trim_distance
+    start_trim = trim_start if trim_start is not None else trim_distance
+    end_trim = trim_end if trim_end is not None else trim_distance
+
+    if start_trim <= 0 and end_trim <= 0:
         return df
 
-    # Find indices where distance is greater than trim_distance from start
-    start_idx = np.where(distance >= trim_distance)[0]
-    if len(start_idx) == 0:
-        print(f"Warning: Cannot trim {trim_distance}m from start - not enough data")
-        start_trim_idx = 0
-    else:
-        start_trim_idx = start_idx[0]
+    # Find indices where distance is greater than start_trim from start
+    start_trim_idx = 0
+    if start_trim > 0:
+        start_idx = np.where(distance >= start_trim)[0]
+        if len(start_idx) == 0:
+            print(f"Warning: Cannot trim {start_trim}m from start - not enough data")
+        else:
+            start_trim_idx = start_idx[0]
 
-    # Find indices where distance is less than trim_distance from end
-    total_distance = distance[-1]
-    end_idx = np.where(distance <= (total_distance - trim_distance))[0]
-    if len(end_idx) == 0:
-        print(f"Warning: Cannot trim {trim_distance}m from end - not enough data")
-        end_trim_idx = len(distance) - 1
-    else:
-        end_trim_idx = end_idx[-1]
+    # Find indices where distance is less than end_trim from end
+    end_trim_idx = len(distance) - 1
+    if end_trim > 0:
+        total_distance = distance[-1]
+        end_idx = np.where(distance <= (total_distance - end_trim))[0]
+        if len(end_idx) == 0:
+            print(f"Warning: Cannot trim {end_trim}m from end - not enough data")
+        else:
+            end_trim_idx = end_idx[-1]
 
     # Apply trimming if possible
     if start_trim_idx >= end_trim_idx:
         print(
-            f"Warning: Cannot trim {trim_distance}m from both ends - keeping original data"
+            f"Warning: Cannot trim {start_trim}m from start and {end_trim}m from end - keeping original data"
         )
         return df
 
