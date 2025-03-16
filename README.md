@@ -44,10 +44,13 @@ python ve_analyzer.py <fit_file> --mass <rider_mass_kg> --rho <air_density_kg_m3
 - `--crr`: Fixed Crr value to use (if provided, only CdA will be optimized)
 - `--debug`: Enable debug output
 - `--trim-distance`: Distance in meters to trim from start and end of recording (default: 0)
+- `--trim-start`: Distance in meters to trim from start of recording (overrides --trim-distance for start)
+- `--trim-end`: Distance in meters to trim from end of recording (overrides --trim-distance for end)
 - `--r2-weight`: Weight for R² in the composite objective (0-1, default: 0.5)
 - `--grid-points`: Number of grid points to use in parameter search (default: 250)
 - `--cda-bounds`: Bounds for CdA optimization as min,max (default: "0.1,0.5")
 - `--crr-bounds`: Bounds for Crr optimization as min,max (default: "0.001,0.01")
+- `--optimize-elevation-gain`: Optimize for a specific elevation gain (in meters). For individual lap analysis, this is the target gain per lap. For combined lap analysis (--selected-laps), this is the target total gain across all selected laps.
 
 ### Examples
 
@@ -59,6 +62,16 @@ python ve_analyzer.py my_ride.fit --mass 75 --rho 1.225
 Analyze specific laps together with custom parameters:
 ```
 python ve_analyzer.py my_ride.fit --mass 75 --rho 1.225 --selected-laps "2,4,6" --cda 0.3 --trim-distance 500
+```
+
+Optimize for zero elevation gain across combined laps:
+```
+python ve_analyzer.py my_ride.fit --mass 75 --rho 1.225 --selected-laps "2,4,6" --optimize-elevation-gain 0
+```
+
+Trim specific distances from start and end:
+```
+python ve_analyzer.py my_ride.fit --mass 75 --rho 1.225 --trim-start 300 --trim-end 200
 ```
 
 ## Output
