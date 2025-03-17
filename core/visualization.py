@@ -1,6 +1,6 @@
-import numpy as np
-import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+import matplotlib.pyplot as plt
+import numpy as np
 from scipy.stats import pearsonr
 
 from core.calculations import calculate_distance
@@ -227,3 +227,183 @@ def plot_summary(summary_df, save_path=None):
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
 
     return fig
+
+
+def plot_static_map(df, save_path=None):
+    """
+    Generate a static map with OpenStreetMap background showing the route.
+
+    Args:
+        df (pandas.DataFrame): DataFrame with cycling data including latitude/longitude
+        save_path (str, optional): Path to save the map image
+
+    Returns:
+        matplotlib.figure.Figure: The created figure
+    """
+    try:
+        import contextily as ctx
+        import geopandas as gpd
+        import matplotlib.pyplot as plt
+        from shapely.geometry import LineString, Point
+    except ImportError:
+        print("To use mapping functionality, install the required packages:")
+        print("pip install matplotlib contextily geopandas shapely")
+        return None
+
+    # Ensure we have latitude and longitude data
+    if "latitude" not in df.columns or "longitude" not in df.columns:
+        print("GPS data not available in the file")
+        return None
+
+    # Create a figure
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Create a list of Point geometries
+    points = [Point(lon, lat) for lon, lat in zip(df["longitude"], df["latitude"])]
+
+    # Create a line from the points (for the route)
+    route_line = LineString(points)
+
+    # Create GeoDataFrame for points and line
+    # Use correct CRS for GPS data (WGS84)
+    geometry = [route_line]
+    gdf_line = gpd.GeoDataFrame(geometry=geometry, crs="EPSG:4326")
+
+    # Transform to Web Mercator projection (what OSM uses)
+    gdf_line = gdf_line.to_crs(epsg=3857)
+
+    # Create GeoDataFrame for start and end points
+    start_point = Point(df["longitude"].iloc[0], df["latitude"].iloc[0])
+    end_point = Point(df["longitude"].iloc[-1], df["latitude"].iloc[-1])
+
+    gdf_points = gpd.GeoDataFrame(
+        geometry=[start_point, end_point],
+        data={"type": ["start", "end"]},
+        crs="EPSG:4326",
+    )
+    gdf_points = gdf_points.to_crs(epsg=3857)
+
+    # Plot on the map
+    gdf_line.plot(ax=ax, color="blue", linewidth=2)
+
+    # Plot start and end points
+    start_mask = gdf_points["type"] == "start"
+    end_mask = gdf_points["type"] == "end"
+
+    gdf_points[start_mask].plot(ax=ax, color="green", markersize=50, zorder=10)
+    gdf_points[end_mask].plot(ax=ax, color="red", markersize=50, zorder=10)
+
+    # Add OSM background with dynamic zoom level
+    try:
+        # Calculate the bounds of the data to determine appropriate zoom
+        bounds = gdf_line.total_bounds  # [minx, miny, maxx, maxy]
+
+        # Calculate the width and height in meters (in web mercator)
+        width_meters = bounds[2] - bounds[0]
+        height_meters = bounds[3] - bounds[1]
+
+        # Maximum dimension in meters
+        max_dimension = max(width_meters, height_meters)
+
+        # Calculate appropriate zoom level
+        # The formula is based on the relationship between zoom level and map resolution
+        # Higher zoom = more detailed but covering less area
+        # Zoom level 19 (max) shows approximately 0.15m per pixel
+        # Zoom level 1 (near min) shows approximately 40000m per pixel
+
+        # Determine zoom based on the track's extent
+        if max_dimension < 500:  # Very short track (< 500m)
+            zoom = 19  # Highest detail
+        elif max_dimension < 1000:  # Short track (< 1km)
+            zoom = 18
+        elif max_dimension < 2000:  # Medium-short track (< 2km)
+            zoom = 17
+        elif max_dimension < 5000:  # Medium track (< 5km)
+            zoom = 16
+        elif max_dimension < 10000:  # Medium-long track (< 10km)
+            zoom = 15
+        elif max_dimension < 20000:  # Long track (< 20km)
+            zoom = 14
+        elif max_dimension < 50000:  # Very long track (< 50km)
+            zoom = 13
+        else:  # Extremely long track
+            zoom = 12
+
+        print(
+            f"Track length: approximately {max_dimension/1000:.1f}km, using zoom level {zoom}"
+        )
+
+        ctx.add_basemap(ax, source=ctx.providers.OpenStreetMap.Mapnik, zoom=zoom)
+    except Exception as e:
+        print(f"Error adding map background: {str(e)}")
+
+    # Remove axis labels which aren't meaningful in this projection
+    ax.set_axis_off()
+
+    # Add a title
+    ax.set_title("Route Map", fontsize=16, pad=20)
+
+    # Save the figure if a path is provided
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    return fig
+
+
+def create_interactive_map(df, save_path=None):
+    """
+    Create an interactive, zoomable map showing the route.
+
+    Args:
+        df (pandas.DataFrame): DataFrame with cycling data including latitude/longitude
+        save_path (str, optional): Path to save the map HTML file
+
+    Returns:
+        folium.Map: The created map object
+    """
+    try:
+        import folium
+    except ImportError:
+        print("To use interactive mapping functionality, install folium:")
+        print("pip install folium")
+        return None
+
+    # Ensure we have latitude and longitude data
+    if "latitude" not in df.columns or "longitude" not in df.columns:
+        print("GPS data not available in the file")
+        return None
+
+    # Calculate the map center
+    center_lat = (df["latitude"].min() + df["latitude"].max()) / 2
+    center_lon = (df["longitude"].min() + df["longitude"].max()) / 2
+
+    # Create map
+    map_obj = folium.Map(location=[center_lat, center_lon], zoom_start=13)
+
+    # Add route polyline
+    points = list(zip(df["latitude"], df["longitude"]))
+    folium.PolyLine(points, color="blue", weight=3, opacity=0.7).add_to(map_obj)
+
+    # Add start marker (green)
+    start_lat = df["latitude"].iloc[0]
+    start_lon = df["longitude"].iloc[0]
+    folium.Marker(
+        location=[start_lat, start_lon],
+        icon=folium.Icon(color="green", icon="play", prefix="fa"),
+        popup="Start",
+    ).add_to(map_obj)
+
+    # Add end marker (red/checkered flag)
+    end_lat = df["latitude"].iloc[-1]
+    end_lon = df["longitude"].iloc[-1]
+    folium.Marker(
+        location=[end_lat, end_lon],
+        icon=folium.Icon(color="red", icon="flag-checkered", prefix="fa"),
+        popup="Finish",
+    ).add_to(map_obj)
+
+    # Save to HTML file if path provided
+    if save_path:
+        map_obj.save(save_path)
+
+    return map_obj

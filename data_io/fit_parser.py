@@ -74,6 +74,17 @@ def parse_fit_file(fit_file_path, debug=False):
     elif "enhanced_altitude" in df.columns:
         df["elevation"] = df["enhanced_altitude"]
 
+    # Extract GPS coordinates
+    if "position_lat" in df.columns and "position_long" in df.columns:
+        # Convert semicircles to degrees (Garmin .fit standard)
+        df["latitude"] = df["position_lat"] / (2**31 / 180)
+        df["longitude"] = df["position_long"] / (2**31 / 180)
+    elif "latitude" in df.columns and "longitude" in df.columns:
+        # Already in degrees, no conversion needed
+        pass
+    else:
+        print("Warning: GPS data not found in the .fit file")
+
     # Extract timestamps
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"])

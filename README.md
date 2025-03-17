@@ -9,7 +9,8 @@ The Virtual Elevation method works by calculating what the elevation profile wou
 ## Requirements
 
 - Python 3.7 or higher
-- Dependencies: numpy, pandas, matplotlib, scipy, fitparse
+- Required dependencies: numpy, pandas, matplotlib, scipy, fitparse
+- Optional mapping dependencies: contextily, folium, geopandas, shapely
 
 ## Installation
 
@@ -21,7 +22,7 @@ The Virtual Elevation method works by calculating what the elevation profile wou
 
 2. Install required dependencies:
    ```
-   pip install numpy pandas matplotlib scipy fitparse
+   pip install -r requirements.txt
    ```
 
 ## Usage
@@ -43,6 +44,7 @@ python ve_analyzer.py <fit_file> --mass <rider_mass_kg> --rho <air_density_kg_m3
 - `--cda`: Fixed CdA value to use (if provided, only Crr will be optimized)
 - `--crr`: Fixed Crr value to use (if provided, only CdA will be optimized)
 - `--debug`: Enable debug output
+- `--show-map`: Display route maps for analyzed laps (static and interactive versions)
 - `--trim-distance`: Distance in meters to trim from start and end of recording (default: 0)
 - `--trim-start`: Distance in meters to trim from start of recording (overrides --trim-distance for start)
 - `--trim-end`: Distance in meters to trim from end of recording (overrides --trim-distance for end)
@@ -74,22 +76,49 @@ Trim specific distances from start and end:
 python ve_analyzer.py my_ride.fit --mass 75 --rho 1.225 --trim-start 300 --trim-end 200
 ```
 
+Generate route maps for each lap:
+```
+python ve_analyzer.py my_ride.fit --mass 75 --rho 1.225 --show-map
+```
+
 ## Output
 
 The tool will create an output directory containing:
 - CSV files with processed data for each lap
 - Elevation comparison plots
 - Summary statistics and optimization results
+- Route maps (if `--show-map` is used):
+  - Static maps (.png) with OpenStreetMap background
+  - Interactive, zoomable maps (.html) for viewing in a web browser
+
+## Map Visualization
+
+When using the `--show-map` option, the tool generates two types of maps:
+
+### Static Maps
+- Shows the complete route on an OpenStreetMap background
+- Green dot marks the start point
+- Red dot marks the end point
+- The zoom level is automatically adjusted based on the track length
+
+### Interactive Maps
+- Zoomable, pannable OpenStreetMap
+- Green marker with play icon at the start
+- Red marker with checkered flag at the finish
+- Click on markers to see "Start" and "Finish" labels
+
+Maps are generated for individual laps or for combined laps, depending on your analysis mode.
 
 ## How It Works
 
-1. The tool reads the FIT file and extracts power, speed, and elevation data
+1. The tool reads the FIT file and extracts power, speed, elevation, and GPS data
 2. It separates the data into individual laps
 3. For each lap (or combined laps), it:
    - Resamples the data to a consistent time interval
    - Calculates acceleration from velocity changes
    - Optimizes CdA and Crr parameters to match actual elevation
    - Plots virtual vs. actual elevation profiles
+   - Generates route maps (if requested)
    - Calculates statistics like RMSE and R²
 4. Generates summary reports and visualizations
 
@@ -99,5 +128,5 @@ GNU GENERAL PUBLIC LICENSE
 
 ## Acknowledgements
 
-- Robert Chung for developing the Virtual Elevation method"
+- Robert Chung for developing the "Virtual Elevation method"
 - https://escapecollective.com/the-chung-method-explained-how-to-aero-test-in-the-real-world-2/

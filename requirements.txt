@@ -1,0 +1,12 @@
+# Core dependencies
+numpy
+pandas
+matplotlib
+scipy
+fitparse
+
+# Mapping dependencies (optional)
+contextily
+folium
+geopandas
+shapely

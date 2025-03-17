@@ -1,28 +1,32 @@
 #!/usr/bin/env python3
 # ve_analyzer.py - Virtual Elevation Analyzer
 
-import os
-import sys
 import argparse
-import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
+import os
 import traceback
 
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
 # Import from our modules
-from core.calculations import accel_calc, delta_ve, calculate_distance
+from core.calculations import accel_calc, calculate_distance, delta_ve
 from core.optimization import (
-    optimize_both_params_balanced,
-    optimize_cda_only_balanced,
-    optimize_crr_only_balanced,
-    optimize_both_params_for_target_elevation,
-    optimize_cda_only_for_target_elevation,
-    optimize_crr_only_for_target_elevation,
     calculate_virtual_profile,
+    optimize_both_params_balanced,
+    optimize_both_params_for_target_elevation,
+    optimize_cda_only_balanced,
+    optimize_cda_only_for_target_elevation,
+    optimize_crr_only_balanced,
+    optimize_crr_only_for_target_elevation,
 )
-from core.visualization import plot_elevation_profiles
+from core.visualization import (
+    create_interactive_map,
+    plot_elevation_profiles,
+    plot_static_map,
+)
+from data_io.data_processing import resample_data, trim_data_by_distance
 from data_io.fit_parser import parse_fit_file
-from data_io.data_processing import trim_data_by_distance, resample_data
 
 
 def analyze_and_plot_ve(
@@ -393,6 +397,7 @@ def analyze_lap_data(
     cda_bounds=(0.1, 0.5),
     crr_bounds=(0.001, 0.01),
     target_elevation_gain=None,
+    show_map=False,  # New parameter for map visualization
 ):
     """
     Process and analyze data by laps.
@@ -585,6 +590,39 @@ def analyze_lap_data(
                 f"  Avg Power: {lap_stats['avg_power']:.1f}W, Avg Speed: {lap_stats['avg_speed']*3.6:.1f}km/h"
             )
 
+            # Generate maps if requested
+            if show_map:
+                # Get the original lap data with GPS coordinates
+                original_lap_df = df[
+                    (df.index >= start_time) & (df.index <= end_time)
+                ].copy()
+
+                if (
+                    "latitude" in original_lap_df.columns
+                    and "longitude" in original_lap_df.columns
+                ):
+                    # Create static map
+                    static_map_path = os.path.join(save_dir, f"lap_{lap_num}_map.png")
+                    try:
+                        plot_static_map(original_lap_df, save_path=static_map_path)
+                        print(f"  Generated static map: {static_map_path}")
+                    except Exception as e:
+                        print(f"  Error creating static map: {str(e)}")
+
+                    # Create interactive map
+                    interactive_map_path = os.path.join(
+                        save_dir, f"lap_{lap_num}_map.html"
+                    )
+                    try:
+                        create_interactive_map(
+                            original_lap_df, save_path=interactive_map_path
+                        )
+                        print(f"  Generated interactive map: {interactive_map_path}")
+                    except Exception as e:
+                        print(f"  Error creating interactive map: {str(e)}")
+                else:
+                    print("  Cannot generate maps: GPS data not available")
+
         except Exception as e:
             print(f"  Error analyzing lap {lap_num}: {str(e)}")
             traceback_info = traceback.format_exc()
@@ -618,6 +656,7 @@ def analyze_combined_laps(
     cda_bounds=(0.1, 0.5),
     crr_bounds=(0.001, 0.01),
     target_elevation_gain=None,
+    show_map=False,  # New parameter for map visualization
 ):
     """
     Process and analyze a specific set of laps combined as one segment.
@@ -890,6 +929,46 @@ def analyze_combined_laps(
         print(f"  Avg Speed: {combined_stats['avg_speed']*3.6:.1f}km/h")
         print(f"  Distance: {combined_stats['distance_meters']/1000:.2f}km")
 
+        # Generate maps if requested
+        if show_map:
+            # Get the original lap data with GPS coordinates for each selected lap
+            original_combined_df = pd.DataFrame()
+
+            for lap in selected_lap_info:
+                lap_df = df[
+                    (df.index >= lap["start_time"]) & (df.index <= lap["end_time"])
+                ].copy()
+                original_combined_df = pd.concat([original_combined_df, lap_df])
+
+            if (
+                "latitude" in original_combined_df.columns
+                and "longitude" in original_combined_df.columns
+            ):
+                # Create static map
+                lap_str = "-".join(map(str, selected_laps))
+                static_map_path = os.path.join(
+                    save_dir, f"laps_{lap_str}_combined_map.png"
+                )
+                try:
+                    plot_static_map(original_combined_df, save_path=static_map_path)
+                    print(f"Generated static map: {static_map_path}")
+                except Exception as e:
+                    print(f"Error creating static map: {str(e)}")
+
+                # Create interactive map
+                interactive_map_path = os.path.join(
+                    save_dir, f"laps_{lap_str}_combined_map.html"
+                )
+                try:
+                    create_interactive_map(
+                        original_combined_df, save_path=interactive_map_path
+                    )
+                    print(f"Generated interactive map: {interactive_map_path}")
+                except Exception as e:
+                    print(f"Error creating interactive map: {str(e)}")
+            else:
+                print("Cannot generate maps: GPS data not available")
+
         return result
 
     except Exception as e:
@@ -1020,6 +1099,9 @@ def main():
         help="Fixed Crr value to use (if provided, only CdA will be optimized)",
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
+    parser.add_argument(
+        "--show-map", action="store_true", help="Show lap routes on a map"
+    )
 
     # Trimming parameters
     parser.add_argument(
@@ -1144,6 +1226,9 @@ def main():
     if args.cda is None and args.crr is None:
         print("Optimizing both CdA and Crr")
 
+    if args.show_map:
+        print("Will generate route maps for analyzed laps")
+
     # Parse the FIT file
     df, lap_messages = parse_fit_file(args.fit_file, args.debug)
 
@@ -1177,6 +1262,7 @@ def main():
                 cda_bounds=cda_bounds,
                 crr_bounds=crr_bounds,
                 target_elevation_gain=args.optimize_elevation_gain,
+                show_map=args.show_map,
             )
 
             if combined_result:
@@ -1222,6 +1308,7 @@ def main():
         cda_bounds=cda_bounds,
         crr_bounds=crr_bounds,
         target_elevation_gain=args.optimize_elevation_gain,
+        show_map=args.show_map,
     )
 
     if results:

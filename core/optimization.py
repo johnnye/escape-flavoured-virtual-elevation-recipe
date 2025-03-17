@@ -1,10 +1,7 @@
-import numpy as np
 import time
-from scipy.optimize import (
-    differential_evolution,
-    minimize_scalar,
-    basinhopping,
-)
+
+import numpy as np
+from scipy.optimize import basinhopping, differential_evolution, minimize_scalar
 from scipy.stats import pearsonr
 
 from core.calculations import delta_ve
