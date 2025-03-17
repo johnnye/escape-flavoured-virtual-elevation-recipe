@@ -44,7 +44,7 @@ def cda_est(
     kg=None,
     rho=None,
     dt=1,
-    eta=1,
+    eta=0.98,
 ):
     """
     Estimate coefficient of drag area (CdA).
@@ -115,7 +115,7 @@ def crr_est(
     kg=None,
     rho=None,
     dt=1,
-    eta=1,
+    eta=0.98,
 ):
     """
     Estimate coefficient of rolling resistance (Crr).
@@ -221,7 +221,7 @@ def delta_ve(
     kg=None,
     rho=None,
     dt=1,
-    eta=1,
+    eta=0.98,
 ):
     """
     Calculate virtual elevation change.
@@ -265,7 +265,7 @@ def delta_ve(
     return vg * dt * np.sin(np.arctan(slope))
 
 
-def lap_work(W, vg, vw=0, kg=None, rho=None, dt=1, eta=1):
+def lap_work(W, vg, vw=0, kg=None, rho=None, dt=1, eta=0.98):
     """
     Calculate work components for segments with zero net elevation.
 
@@ -397,7 +397,7 @@ def virtual_slope(
     kg=None,
     rho=None,
     dt=1,
-    eta=1,
+    eta=0.98,
 ):
     """
     Calculate virtual slope.
@@ -472,7 +472,7 @@ def virtual_wind(
     kg=None,
     rho=None,
     dt=1,
-    eta=1,
+    eta=0.98,
 ):
     """
     Calculate virtual wind.

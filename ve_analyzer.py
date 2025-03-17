@@ -35,7 +35,7 @@ def analyze_and_plot_ve(
     kg=None,
     rho=None,
     dt=1,
-    eta=1,
+    eta=0.98,
     vw=0,
     distance_col=None,
     save_path=None,

@@ -96,7 +96,7 @@ def optimize_both_params_balanced(
     n_grid=100,  # Reduced grid size to compensate for multiple starts
     r2_weight=0.5,  # Weight for R² in the composite objective (0-1)
     dt=1,
-    eta=1,
+    eta=0.98,
     vw=0,
     lap_column=None,
     rmse_scale=None,  # Auto-calculated scaling factor for RMSE
@@ -388,7 +388,7 @@ def optimize_cda_only_balanced(
     n_points=100,  # Reduced for efficiency with multiple starts
     r2_weight=0.5,  # Weight for R² in the composite objective (0-1)
     dt=1,
-    eta=1,
+    eta=0.98,
     vw=0,
     lap_column=None,
     rmse_scale=None,  # Auto-calculated scaling factor for RMSE
@@ -635,7 +635,7 @@ def optimize_crr_only_balanced(
     n_points=100,  # Reduced for efficiency with multiple starts
     r2_weight=0.5,  # Weight for R² in the composite objective (0-1)
     dt=1,
-    eta=1,
+    eta=0.98,
     vw=0,
     lap_column=None,
     rmse_scale=None,  # Auto-calculated scaling factor for RMSE
@@ -881,7 +881,7 @@ def optimize_both_params_for_target_elevation(
     target_elevation_gain=0,
     n_grid=250,
     dt=1,
-    eta=1,
+    eta=0.98,
     vw=0,
     lap_column=None,
     is_combined_laps=False,
@@ -1271,7 +1271,7 @@ def optimize_cda_only_for_target_elevation(
     target_elevation_gain=0,
     n_points=100,
     dt=1,
-    eta=1,
+    eta=0.98,
     vw=0,
     lap_column=None,
     is_combined_laps=False,
@@ -1614,7 +1614,7 @@ def optimize_crr_only_for_target_elevation(
     target_elevation_gain=0,
     n_points=100,
     dt=1,
-    eta=1,
+    eta=0.98,
     vw=0,
     lap_column=None,
     is_combined_laps=False,
