@@ -47,7 +47,9 @@ def analyze_and_plot_ve(
     cda_bounds=(0.1, 0.5),
     crr_bounds=(0.001, 0.01),
     target_elevation_gain=None,
-    is_combined_laps=False,  # New parameter to handle combined laps
+    is_combined_laps=False,
+    interactive_plot=False,
+    lap_num=None,  # Added parameter for lap number
 ):
     """
     Complete workflow function to analyze data, optimize parameters, and plot results.
@@ -71,6 +73,8 @@ def analyze_and_plot_ve(
         crr_bounds (tuple): (min, max) bounds for Crr optimization
         target_elevation_gain (float, optional): Target elevation gain to optimize for (default: None uses R²/RMSE)
         is_combined_laps (bool): Whether this is for combined laps analysis (affects how target_elevation_gain is interpreted)
+        interactive_plot (bool): Whether to show interactive plot for parameter fine-tuning
+        lap_num (int, optional): Current lap number being processed
 
     Returns:
         tuple: (optimized_cda, optimized_crr, rmse, r2, fig)
@@ -322,19 +326,21 @@ def analyze_and_plot_ve(
         sum(elevation_gains) / len(elevation_gains) if elevation_gains else 0
     )
 
-    # Plot results
-    fig = plot_elevation_profiles(
-        df=df,
-        actual_elevation=actual_elevation,
-        virtual_elevation=virtual_elevation,
-        distance=distance,
-        cda=optimized_cda,
-        crr=optimized_crr,
-        rmse=rmse,
-        r2=r2,
-        save_path=save_path,
-        lap_column=lap_column,
-    )
+    # Plot results if not in interactive mode
+    fig = None
+    if not interactive_plot:
+        fig = plot_elevation_profiles(
+            df=df,
+            actual_elevation=actual_elevation,
+            virtual_elevation=virtual_elevation,
+            distance=distance,
+            cda=optimized_cda,
+            crr=optimized_crr,
+            rmse=rmse,
+            r2=r2,
+            save_path=save_path,
+            lap_column=lap_column,
+        )
 
     # Print results
     print(f"Analysis Results:")
@@ -375,6 +381,58 @@ def analyze_and_plot_ve(
                 print(f"  Target elevation gain: {target_elevation_gain:.2f} meters")
                 print(f"  Deviation from target: {deviation:.2f} meters")
 
+    # For interactive plotting, we handle this in the analyze_lap_data function now
+    # to ensure the proper workflow with save functionality
+    if interactive_plot and not lap_num:  # Only use this for non-lap based analysis
+        print("\nLaunching interactive plot for parameter fine-tuning...")
+        saved_params = show_interactive_plot(
+            df=df,
+            actual_elevation=actual_elevation,
+            optimized_cda=optimized_cda,
+            optimized_crr=optimized_crr,
+            distance=distance,
+            kg=kg,
+            rho=rho,
+            dt=dt,
+            eta=eta,
+            vw=vw,
+            lap_column=lap_column,
+            rmse=rmse,
+            r2=r2,
+            save_path=None,  # Don't save by default
+            cda_range=cda_bounds,
+            crr_range=crr_bounds,
+        )
+
+        # Update parameters if the user saved new ones
+        if saved_params:
+            optimized_cda, optimized_crr = saved_params
+
+            # Recalculate virtual elevation with new parameters
+            ve_changes = delta_ve(
+                cda=optimized_cda,
+                crr=optimized_crr,
+                df=df,
+                vw=vw,
+                kg=kg,
+                rho=rho,
+                dt=dt,
+                eta=eta,
+            )
+            virtual_elevation = calculate_virtual_profile(
+                ve_changes, actual_elevation, lap_column, df
+            )
+
+            # Recalculate metrics
+            rmse = np.sqrt(np.mean((virtual_elevation - actual_elevation) ** 2))
+            r2 = pearsonr(virtual_elevation, actual_elevation)[0] ** 2
+
+            print(f"\nUpdated parameters from interactive session:")
+            print(f"  CdA: {optimized_cda:.4f} m²")
+            print(f"  Crr: {optimized_crr:.5f}")
+            print(f"  RMSE: {rmse:.2f} meters")
+            print(f"  R²: {r2:.4f}")
+
     return optimized_cda, optimized_crr, rmse, r2, fig
 
 
@@ -397,7 +455,8 @@ def analyze_lap_data(
     cda_bounds=(0.1, 0.5),
     crr_bounds=(0.001, 0.01),
     target_elevation_gain=None,
-    show_map=False,  # New parameter for map visualization
+    show_map=False,
+    interactive_plot=False,
 ):
     """
     Process and analyze data by laps.
@@ -480,6 +539,15 @@ def analyze_lap_data(
             ["v", "watts", "elevation"]
         ]
 
+        # Add coordinates if available
+        if "latitude" in df.columns and "longitude" in df.columns:
+            lap_df["latitude"] = df[(df.index >= start_time) & (df.index <= end_time)][
+                "latitude"
+            ]
+            lap_df["longitude"] = df[(df.index >= start_time) & (df.index <= end_time)][
+                "longitude"
+            ]
+
         if len(lap_df) < 10:
             print(f"  Skipping lap {lap_num}: Not enough data points ({len(lap_df)})")
             continue
@@ -507,8 +575,70 @@ def analyze_lap_data(
         # Calculate acceleration
         resampled_df["a"] = accel_calc(resampled_df["v"].values, dt)
 
-        # Calculate distance for trimming
-        if trim_distance > 0 or trim_start is not None or trim_end is not None:
+        # Set up paths for saving files
+        save_path = None
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(save_dir, f"lap_{lap_num}_elevation.png")
+
+        # ---------------------------------------------------------------------------
+        # NEW INTERACTIVE WORKFLOW
+        # ---------------------------------------------------------------------------
+        if interactive_plot:
+            # Calculate distance before trimming for the interactive map
+            distance_before_trim = calculate_distance(resampled_df, dt)
+
+            # First, show the interactive map with trim sliders
+            from core.visualization import create_interactive_trim_map
+
+            # Get initial trim values
+            initial_trim_start = trim_start if trim_start is not None else trim_distance
+            initial_trim_end = trim_end if trim_end is not None else trim_distance
+
+            # Create interactive map for trimming
+            map_save_path = None
+            if save_dir:
+                map_save_path = os.path.join(save_dir, f"lap_{lap_num}_trim_map.png")
+
+            action, user_trim_start, user_trim_end = create_interactive_trim_map(
+                resampled_df,
+                lap_num,
+                initial_trim_start=initial_trim_start,
+                initial_trim_end=initial_trim_end,
+                save_path=map_save_path,
+            )
+
+            # Check if user chose to skip this lap
+            if action == "skip":
+                print(f"  User chose to skip lap {lap_num}")
+                continue
+
+            # Use the user-selected trim values
+            print(
+                f"  Using user-selected trim values: start={user_trim_start:.1f}m, end={user_trim_end:.1f}m"
+            )
+
+            # Calculate distance for trimming
+            distance = calculate_distance(resampled_df, dt)
+
+            # Apply trimming with user-selected values
+            resampled_df = trim_data_by_distance(
+                resampled_df, distance, 0, user_trim_start, user_trim_end
+            )
+
+            if len(resampled_df) < 10:
+                print(
+                    f"  Skipping lap {lap_num}: Not enough data points after trimming ({len(resampled_df)})"
+                )
+                continue
+
+            # Recalculate distance after trimming
+            distance = calculate_distance(resampled_df, dt)
+
+        # ---------------------------------------------------------------------------
+        # REGULAR WORKFLOW (non-interactive or after interactive trimming)
+        # ---------------------------------------------------------------------------
+        elif trim_distance > 0 or trim_start is not None or trim_end is not None:
             # Calculate distance
             distance = calculate_distance(resampled_df, dt)
             # Apply trimming with prioritized individual trim values
@@ -532,14 +662,13 @@ def analyze_lap_data(
             elif trim_distance > 0 and trim_start is None:
                 print(f"  Trimmed {trim_distance}m from end of lap")
 
-        # Run analysis
-        save_path = None
-        if save_dir:
-            os.makedirs(save_dir, exist_ok=True)
-            save_path = os.path.join(save_dir, f"lap_{lap_num}_elevation.png")
+        # If neither interactive nor regular trimming is specified, calculate distance
+        else:
+            distance = calculate_distance(resampled_df, dt)
 
         try:
-            # Perform the analysis
+            # Run the analysis/optimization
+            print("  Running parameter optimization...")
             cda, crr, rmse, r2, fig = analyze_and_plot_ve(
                 df=resampled_df,
                 actual_elevation_col="elevation",
@@ -554,12 +683,16 @@ def analyze_lap_data(
                 cda_bounds=cda_bounds,
                 crr_bounds=crr_bounds,
                 target_elevation_gain=target_elevation_gain,
+                interactive_plot=False,  # Don't show interactive plot yet
             )
+            # Close the static plot if we're using interactive mode
+            if interactive_plot:
+                plt.close(fig)
 
             # Calculate lap statistics
             lap_stats = {
                 "duration_seconds": duration,
-                "distance_meters": resampled_df["v"].sum() * dt,  # Approximate distance
+                "distance_meters": np.sum(resampled_df["v"].values * dt),
                 "avg_power": resampled_df["watts"].mean(),
                 "max_power": resampled_df["watts"].max(),
                 "avg_speed": resampled_df["v"].mean(),
@@ -571,6 +704,127 @@ def analyze_lap_data(
                 "end_time": end_time,
                 "lap_number": lap_num,
             }
+
+            # ---------------------------------------------------------------------------
+            # INTERACTIVE PARAMETER TUNING (after optimization)
+            # ---------------------------------------------------------------------------
+            if interactive_plot:
+                print("\n  Opening interactive parameter tuning plot...")
+                print(
+                    "  Optimized parameters: CdA={:.4f}m², Crr={:.5f}".format(cda, crr)
+                )
+                print(
+                    "  Use sliders to adjust parameters and click 'Save Results' when satisfied"
+                )
+
+                # Use the create_interactive_elevation_plot with the save button
+                from core.visualization import (
+                    create_interactive_elevation_plot,
+                    delta_ve,
+                    calculate_virtual_profile,
+                )
+
+                interactive_save_path = None
+                if save_dir:
+                    interactive_save_path = os.path.join(
+                        save_dir, f"lap_{lap_num}_interactive.png"
+                    )
+
+                # Call the modified interactive plot function
+                interactive_fig, _, _, _, _, saved_params = (
+                    create_interactive_elevation_plot(
+                        df=resampled_df,
+                        actual_elevation=resampled_df["elevation"].values,
+                        initial_cda=cda,
+                        initial_crr=crr,
+                        distance=distance,
+                        kg=rider_mass,
+                        rho=air_density,
+                        dt=dt,
+                        eta=0.98,
+                        vw=0,
+                        lap_column=None,
+                        cda_range=cda_bounds,
+                        crr_range=crr_bounds,
+                        initial_rmse=rmse,
+                        initial_r2=r2,
+                        save_path=interactive_save_path,
+                        lap_num=lap_num,
+                    )
+                )
+
+                # Show the plot (blocks until closed)
+                plt.show()
+
+                # Check if parameters were saved
+                if saved_params[0] is not None:
+                    # Unpack the new parameters
+                    new_cda, new_crr = saved_params[0]
+
+                    # Only update if they're different from the optimized values
+                    if new_cda != cda or new_crr != crr:
+                        print(
+                            f"  User saved new parameters: CdA={new_cda:.4f}m², Crr={new_crr:.5f}"
+                        )
+
+                        # Recalculate virtual elevation with new parameters
+                        ve_changes = delta_ve(
+                            cda=new_cda,
+                            crr=new_crr,
+                            df=resampled_df,
+                            vw=0,
+                            kg=rider_mass,
+                            rho=air_density,
+                            dt=dt,
+                            eta=0.98,
+                        )
+                        virtual_elevation = calculate_virtual_profile(
+                            ve_changes,
+                            resampled_df["elevation"].values,
+                            None,
+                            resampled_df,
+                        )
+
+                        # Recalculate metrics
+                        new_rmse = np.sqrt(
+                            np.mean(
+                                (virtual_elevation - resampled_df["elevation"].values)
+                                ** 2
+                            )
+                        )
+                        from scipy.stats import pearsonr
+
+                        new_r2 = (
+                            pearsonr(
+                                virtual_elevation, resampled_df["elevation"].values
+                            )[0]
+                            ** 2
+                        )
+
+                        # Update the values
+                        cda, crr, rmse, r2 = new_cda, new_crr, new_rmse, new_r2
+
+                        # Save a new plot with the updated parameters
+                        if save_dir:
+                            updated_save_path = os.path.join(
+                                save_dir, f"lap_{lap_num}_elevation_manual.png"
+                            )
+                            updated_fig = plot_elevation_profiles(
+                                df=resampled_df,
+                                actual_elevation=resampled_df["elevation"].values,
+                                virtual_elevation=virtual_elevation,
+                                distance=distance,
+                                cda=cda,
+                                crr=crr,
+                                rmse=rmse,
+                                r2=r2,
+                                save_path=updated_save_path,
+                                lap_column=None,
+                            )
+                            plt.close(updated_fig)
+
+                else:
+                    print("  No parameter changes were saved")
 
             # Store results
             results[f"lap_{lap_num}"] = {
@@ -657,6 +911,7 @@ def analyze_combined_laps(
     crr_bounds=(0.001, 0.01),
     target_elevation_gain=None,
     show_map=False,  # New parameter for map visualization
+    interactive_plot=False,  # New parameter
 ):
     """
     Process and analyze a specific set of laps combined as one segment.
@@ -712,9 +967,13 @@ def analyze_combined_laps(
 
     for lap in selected_lap_info:
         # Extract lap data
+        columns_to_extract = ["v", "watts", "elevation"]
+        if "latitude" in df.columns and "longitude" in df.columns:
+            columns_to_extract.extend(["latitude", "longitude"])
+
         lap_df = df[
             (df.index >= lap["start_time"]) & (df.index <= lap["end_time"])
-        ].copy()[["v", "watts", "elevation"]]
+        ].copy()[columns_to_extract]
 
         if len(lap_df) < 10:
             print(
@@ -781,8 +1040,63 @@ def analyze_combined_laps(
 
     combined_df["a"] = a_values
 
-    # Apply distance trimming if requested
-    if trim_distance > 0 or trim_start is not None or trim_end is not None:
+    # Apply interactive trimming if requested
+    print(f"Is interactive plot: {interactive_plot}")
+    if interactive_plot:
+        # Calculate distance before trimming for the interactive map
+        distance_before_trim = calculate_distance(combined_df, dt)
+
+        # First, show the interactive map with trim sliders
+        from core.visualization import create_interactive_trim_map
+
+        # Get initial trim values
+        initial_trim_start = trim_start if trim_start is not None else trim_distance
+        initial_trim_end = trim_end if trim_end is not None else trim_distance
+
+        # Create interactive map for trimming
+        map_save_path = None
+        if save_dir:
+            lap_str = "-".join(map(str, selected_laps))
+            map_save_path = os.path.join(
+                save_dir, f"laps_{lap_str}_combined_trim_map.png"
+            )
+        print(f"Map save path: {map_save_path}")
+        print(f"Initial trim start: {initial_trim_start}")
+        print(f"Starting to create interactive trim map")
+        action, user_trim_start, user_trim_end = create_interactive_trim_map(
+            combined_df,
+            0,  # Use 0 for combined laps
+            initial_trim_start=initial_trim_start,
+            initial_trim_end=initial_trim_end,
+            save_path=map_save_path,
+        )
+        print(f"Action: {action}")
+        # Check if user chose to skip
+        if action == "skip":
+            print(f"User chose to skip combined laps")
+            return None
+
+        # Use the user-selected trim values
+        print(
+            f"Using user-selected trim values: start={user_trim_start:.1f}m, end={user_trim_end:.1f}m"
+        )
+
+        # Calculate distance for trimming
+        distance = calculate_distance(combined_df, dt)
+
+        # Apply trimming with user-selected values
+        combined_df = trim_data_by_distance(
+            combined_df, distance, 0, user_trim_start, user_trim_end
+        )
+
+        if len(combined_df) < 10:
+            print(f"Not enough data points after trimming ({len(combined_df)})")
+            return None
+
+        # Recalculate distance after trimming
+        distance = calculate_distance(combined_df, dt)
+    # Apply distance trimming if requested and not in interactive mode
+    elif trim_distance > 0 or trim_start is not None or trim_end is not None:
         # Calculate distance
         distance = calculate_distance(combined_df, dt)
         # Apply trimming with prioritized individual trim values
@@ -803,7 +1117,9 @@ def analyze_combined_laps(
             print(f"Trimmed {trim_end}m from end of recording")
         elif trim_distance > 0 and trim_start is None:
             print(f"Trimmed {trim_distance}m from end of recording")
-
+    else:
+        # Calculate distance for later use
+        distance = calculate_distance(combined_df, dt)
     # Run analysis
     save_path = None
     if save_dir:
@@ -837,7 +1153,11 @@ def analyze_combined_laps(
                 crr_bounds=crr_bounds,
                 target_elevation_gain=target_elevation_gain,
                 is_combined_laps=True,  # Indicate this is for combined laps
+                interactive_plot=interactive_plot,
             )
+            # Close the static plot if we're using interactive mode
+            if interactive_plot:
+                plt.close(fig)
         elif target_elevation_gain is not None and fixed_crr is not None:
             # Optimize CdA only with fixed Crr
             cda, crr, rmse, r2, fig = analyze_and_plot_ve(
@@ -856,7 +1176,11 @@ def analyze_combined_laps(
                 crr_bounds=crr_bounds,
                 target_elevation_gain=target_elevation_gain,
                 is_combined_laps=True,  # Indicate this is for combined laps
+                interactive_plot=interactive_plot,
             )
+            # Close the static plot if we're using interactive mode
+            if interactive_plot:
+                plt.close(fig)
         elif target_elevation_gain is not None:
             # Optimize both parameters
             cda, crr, rmse, r2, fig = analyze_and_plot_ve(
@@ -875,7 +1199,11 @@ def analyze_combined_laps(
                 crr_bounds=crr_bounds,
                 target_elevation_gain=target_elevation_gain,
                 is_combined_laps=True,  # Indicate this is for combined laps
+                interactive_plot=interactive_plot,
             )
+            # Close the static plot if we're using interactive mode
+            if interactive_plot:
+                plt.close(fig)
         else:
             # Standard r2/RMSE optimization
             cda, crr, rmse, r2, fig = analyze_and_plot_ve(
@@ -893,7 +1221,11 @@ def analyze_combined_laps(
                 cda_bounds=cda_bounds,
                 crr_bounds=crr_bounds,
                 target_elevation_gain=None,
+                interactive_plot=interactive_plot,
             )
+            # Close the static plot if we're using interactive mode
+            if interactive_plot:
+                plt.close(fig)
 
         # Calculate statistics
         combined_stats = {
@@ -1052,6 +1384,113 @@ def summarize_lap_results(results, save_path=None):
     return summary_df
 
 
+def show_interactive_plot(
+    df,
+    actual_elevation,
+    optimized_cda,
+    optimized_crr,
+    distance=None,
+    kg=None,
+    rho=None,
+    dt=1,
+    eta=0.98,
+    vw=0,
+    lap_column=None,
+    rmse=None,
+    r2=None,
+    save_path=None,
+    cda_range=None,
+    crr_range=None,
+    lap_num=None,  # Added parameter for lap number
+):
+    """
+    Show an interactive plot with sliders for CdA and Crr parameters.
+
+    Args:
+        df (pandas.DataFrame): DataFrame with cycling data
+        actual_elevation (array-like): Actual measured elevation data
+        optimized_cda (float): Optimized CdA value
+        optimized_crr (float): Optimized Crr value
+        distance (array-like, optional): Distance data in meters
+        kg (float): Rider mass in kg
+        rho (float): Air density in kg/m³
+        dt (float): Time interval in seconds
+        eta (float): Drivetrain efficiency
+        vw (float): Wind velocity in m/s (positive = headwind)
+        lap_column (str, optional): Column name containing lap numbers
+        rmse (float, optional): RMSE value from optimization
+        r2 (float, optional): R² value from optimization
+        save_path (str, optional): Path to save a screenshot of the plot
+        cda_range (tuple, optional): (min, max) range for CdA slider
+        crr_range (tuple, optional): (min, max) range for Crr slider
+        lap_num (int, optional): Current lap number being processed
+
+    Returns:
+        tuple: (final_cda, final_crr) or None if no parameters were saved
+    """
+    from core.visualization import create_interactive_elevation_plot
+
+    if kg is None or rho is None:
+        raise ValueError(
+            "Rider mass (kg) and air density (rho) are required parameters"
+        )
+
+    # Set default ranges if not provided
+    if cda_range is None:
+        # Set range to ±50% of optimized value, but within reasonable bounds
+        cda_min = max(0.05, optimized_cda * 0.5)
+        cda_max = min(0.8, optimized_cda * 1.5)
+        cda_range = (cda_min, cda_max)
+
+    if crr_range is None:
+        # Set range to ±50% of optimized value, but within reasonable bounds
+        crr_min = max(0.0005, optimized_crr * 0.5)
+        crr_max = min(0.02, optimized_crr * 1.5)
+        crr_range = (crr_min, crr_max)
+
+    print(f"\nShowing interactive plot with initial parameters:")
+    print(
+        f"  CdA: {optimized_cda:.4f} m² (range: {cda_range[0]:.4f} - {cda_range[1]:.4f})"
+    )
+    print(
+        f"  Crr: {optimized_crr:.5f} (range: {crr_range[0]:.5f} - {crr_range[1]:.5f})"
+    )
+    print("Use sliders to adjust parameters and observe changes in real-time")
+    print("Click 'Save Results' when you're satisfied with the parameters")
+
+    # Create and display the interactive plot with save button
+    fig, cda_slider, crr_slider, reset_button, save_button, saved_params = (
+        create_interactive_elevation_plot(
+            df=df,
+            actual_elevation=actual_elevation,
+            initial_cda=optimized_cda,
+            initial_crr=optimized_crr,
+            distance=distance,
+            kg=kg,
+            rho=rho,
+            dt=dt,
+            eta=eta,
+            vw=vw,
+            lap_column=lap_column,
+            cda_range=cda_range,
+            crr_range=crr_range,
+            initial_rmse=rmse,
+            initial_r2=r2,
+            save_path=save_path,
+            lap_num=lap_num,
+        )
+    )
+
+    # Show the plot
+    plt.show()
+
+    # Return the saved parameters if any
+    if saved_params[0] is not None:
+        return saved_params[0]
+    else:
+        return None
+
+
 def main():
     """
     Command-line tool for analyzing .fit files by laps.
@@ -1153,6 +1592,13 @@ def main():
         type=float,
         default=None,
         help="Optimize for a specific elevation gain (in meters). For individual lap analysis, this is the target gain per lap. For combined lap analysis (--selected-laps), this is the target total gain across all selected laps.",
+    )
+
+    # In the main() function in ve_analyzer.py
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Show interactive plot for manual parameter fine-tuning after optimization",
     )
 
     args = parser.parse_args()
@@ -1263,6 +1709,7 @@ def main():
                 crr_bounds=crr_bounds,
                 target_elevation_gain=args.optimize_elevation_gain,
                 show_map=args.show_map,
+                interactive_plot=args.interactive,
             )
 
             if combined_result:
@@ -1275,9 +1722,10 @@ def main():
                 print(f"CdA: {combined_result['cda']:.4f} m²")
                 print(f"Crr: {combined_result['crr']:.5f}")
 
-                # Display the plot
-                plt.figure(combined_result["fig"].number)
-                plt.show()
+                # Display the plot if it exists
+                if combined_result["fig"] is not None:
+                    plt.figure(combined_result["fig"].number)
+                    plt.show()
 
                 return combined_result
             else:
@@ -1309,6 +1757,7 @@ def main():
         crr_bounds=crr_bounds,
         target_elevation_gain=args.optimize_elevation_gain,
         show_map=args.show_map,
+        interactive_plot=args.interactive,
     )
 
     if results:

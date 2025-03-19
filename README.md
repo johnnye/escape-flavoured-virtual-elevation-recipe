@@ -53,6 +53,7 @@ python ve_analyzer.py <fit_file> --mass <rider_mass_kg> --rho <air_density_kg_m3
 - `--cda-bounds`: Bounds for CdA optimization as min,max (default: "0.1,0.5")
 - `--crr-bounds`: Bounds for Crr optimization as min,max (default: "0.001,0.01")
 - `--optimize-elevation-gain`: Optimize for a specific elevation gain (in meters). For individual lap analysis, this is the target gain per lap. For combined lap analysis (--selected-laps), this is the target total gain across all selected laps.
+- `--interactive`: Enable interactive mode for data trimming and parameter fine-tuning
 
 ### Examples
 
@@ -80,6 +81,25 @@ Generate route maps for each lap:
 ```
 python ve_analyzer.py my_ride.fit --mass 75 --rho 1.225 --show-map
 ```
+
+Use interactive mode for data trimming and parameter fine-tuning:
+```
+python ve_analyzer.py my_ride.fit --mass 75 --rho 1.225 --interactive
+```
+
+## Interactive Mode Features
+
+When using the `--interactive` option, the tool provides an enhanced user experience:
+
+- **Data Trimming**: For both individual and combined lap analysis, an interactive map is displayed allowing you to trim unwanted sections from the start and end of each lap using sliders.
+- **Parameter Fine-tuning**: After optimization, an interactive plot allows you to manually adjust CdA and Crr values while seeing the immediate effect on the elevation profile.
+- **Save Results**: After adjusting parameters, click "Save Results" to save your selections. The plot window will automatically close.
+- **Skip Lap Option**: During data trimming, you can choose to skip analyzing specific laps.
+
+The interactive mode is particularly useful for:
+- Removing noisy data at the start/end of laps
+- Fine-tuning CdA/Crr parameters manually based on visual inspection
+- Quickly iterating through different parameter values to find the best match
 
 ## Output
 
@@ -116,8 +136,10 @@ Maps are generated for individual laps or for combined laps, depending on your a
 3. For each lap (or combined laps), it:
    - Resamples the data to a consistent time interval
    - Calculates acceleration from velocity changes
+   - In interactive mode, displays a trim map for selecting start/end points
    - Optimizes CdA and Crr parameters to match actual elevation
    - Plots virtual vs. actual elevation profiles
+   - In interactive mode, allows manual fine-tuning of parameters
    - Generates route maps (if requested)
    - Calculates statistics like RMSE and R²
 4. Generates summary reports and visualizations
@@ -130,3 +152,5 @@ GNU GENERAL PUBLIC LICENSE
 
 - Robert Chung for developing the "Virtual Elevation method"
 - https://escapecollective.com/the-chung-method-explained-how-to-aero-test-in-the-real-world-2/
+- John Karrasch (https://www.instagram.com/flexfitbyjohn/) for applying the Virtual Elevation method to real-world gravel surface testing
+- https://escapecollective.com/performance-process-mtb-v-gravel-tyre-testing-how-to-diy-test-your-setup/
