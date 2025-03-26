@@ -1071,3 +1071,1222 @@ def create_interactive_trim_map(
 
     # Return the result: action, trim_start, trim_end
     return result[0], result[1], result[2]
+
+
+def create_combined_interactive_plot(
+    df,
+    actual_elevation,
+    lap_num,
+    rider_mass,
+    air_density,
+    initial_cda=0.3,
+    initial_crr=0.005,
+    initial_trim_start=0,
+    initial_trim_end=0,
+    dt=1,
+    eta=0.98,
+    vw=0,
+    cda_range=None,
+    crr_range=None,
+    save_path=None,
+    optimization_function=None,
+    distance=None,
+    lap_column=None,
+    target_elevation_gain=None,  # Added this parameter
+):
+    """
+    Create a combined interactive plot with map, elevation profiles, and parameter sliders.
+
+    Args:
+        df (pandas.DataFrame): DataFrame with cycling data including latitude/longitude
+        actual_elevation (array-like): Actual measured elevation data
+        lap_num (int): Current lap number being processed (0 for combined laps)
+        rider_mass (float): Rider mass in kg
+        air_density (float): Air density in kg/m³
+        initial_cda (float): Initial CdA value
+        initial_crr (float): Initial Crr value
+        initial_trim_start (float): Initial trim start distance in meters
+        initial_trim_end (float): Initial trim end distance in meters
+        dt (float): Time interval in seconds
+        eta (float): Drivetrain efficiency
+        vw (float): Wind velocity in m/s (positive = headwind)
+        cda_range (tuple): (min, max) range for CdA slider
+        crr_range (tuple): (min, max) range for Crr slider
+        save_path (str, optional): Path to save a screenshot of the plot
+        optimization_function (callable): Function to perform optimization
+        distance (array-like, optional): Distance data in meters
+        lap_column (str, optional): Column name containing lap numbers
+        target_elevation_gain (float, optional): Target elevation gain in meters
+
+    Returns:
+        tuple: (action, trim_start, trim_end, cda, crr, rmse, r2)
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+    from matplotlib.widgets import Slider, Button
+    import numpy as np
+    from scipy.stats import pearsonr
+    import time
+
+    try:
+        import contextily as ctx
+        import geopandas as gpd
+        from shapely.geometry import LineString, Point
+
+        map_libs_available = True
+    except ImportError:
+        print(
+            "Map libraries not available. Install them with: pip install contextily geopandas shapely"
+        )
+        map_libs_available = False
+
+    plt.ioff()  # Turn off interactive mode to prevent unexpected plot displays
+
+    from core.calculations import calculate_distance, delta_ve
+    from core.optimization import calculate_virtual_profile
+
+    # Set default ranges if not provided
+    if cda_range is None:
+        cda_min = max(0.05, initial_cda * 0.5)
+        cda_max = min(0.8, initial_cda * 1.5)
+        cda_range = (cda_min, cda_max)
+
+    if crr_range is None:
+        crr_min = max(0.0005, initial_crr * 0.5)
+        crr_max = min(0.02, initial_crr * 1.5)
+        crr_range = (crr_min, crr_max)
+
+    # Calculate distance if not provided
+    if distance is None:
+        distance = calculate_distance(df, dt)
+
+    # Calculate total distance
+    total_distance = distance[-1]
+
+    # Calculate minimum distance needed for 30 seconds of data
+    avg_speed = df["v"].mean()
+    min_distance_for_30s = avg_speed * 30  # 30 seconds * average speed
+
+    # Set maximum trim to nearly the full distance (95%)
+    max_trim = total_distance * 0.95
+
+    # Cap initial trim values
+    initial_trim_start = min(initial_trim_start, max_trim)
+    initial_trim_end = min(initial_trim_end, max_trim)
+
+    # Create a figure with a grid layout - MODIFIED to remove route plot
+    fig = plt.figure(figsize=(15, 10))
+
+    # Create grid layout with different areas for map, elevation plot, residuals
+    # Removed the route plot and adjusted the grid
+    gs = gridspec.GridSpec(3, 1, height_ratios=[3, 2, 1])
+
+    # Map view
+    ax_map = fig.add_subplot(gs[0])
+
+    # Elevation plot for both actual and virtual profiles
+    ax_elevation = fig.add_subplot(gs[1])
+
+    # Residuals plot aligned with elevation plot (share x-axis for alignment)
+    ax_residual = fig.add_subplot(gs[2], sharex=ax_elevation)
+
+    # Status area at bottom (hidden)
+    ax_status = fig.add_subplot(gs[2, :])
+    ax_status.set_visible(False)  # Hide but keep for layout
+
+    # Add space for sliders and buttons
+    plt.subplots_adjust(bottom=0.30)
+
+    # Create slider axes
+    ax_trim_start = plt.axes([0.15, 0.20, 0.70, 0.02])
+    ax_trim_end = plt.axes([0.15, 0.16, 0.70, 0.02])
+    ax_cda_slider = plt.axes([0.15, 0.12, 0.70, 0.02])
+    ax_crr_slider = plt.axes([0.15, 0.08, 0.70, 0.02])
+
+    # Create button axes
+    ax_skip = plt.axes([0.15, 0.03, 0.20, 0.04])
+    ax_optimize = plt.axes([0.40, 0.03, 0.20, 0.04])
+    ax_save = plt.axes([0.65, 0.03, 0.20, 0.04])
+
+    # Make sure the sliders are created with this new max_trim value
+    trim_start_slider = Slider(
+        ax=ax_trim_start,
+        label="Trim Start (m)",
+        valmin=0,
+        valmax=max_trim,
+        valinit=initial_trim_start,
+        valfmt="%.0f",
+    )
+
+    trim_end_slider = Slider(
+        ax=ax_trim_end,
+        label="Trim End (m)",
+        valmin=0,
+        valmax=max_trim,
+        valinit=initial_trim_end,
+        valfmt="%.0f",
+    )
+
+    cda_slider = Slider(
+        ax=ax_cda_slider,
+        label="CdA (m²)",
+        valmin=cda_range[0],
+        valmax=cda_range[1],
+        valinit=initial_cda,
+        valfmt="%.4f",
+    )
+
+    crr_slider = Slider(
+        ax=ax_crr_slider,
+        label="Crr",
+        valmin=crr_range[0],
+        valmax=crr_range[1],
+        valinit=initial_crr,
+        valfmt="%.5f",
+    )
+
+    # Display optimization type
+    optimization_type = (
+        "Target Elevation Gain" if target_elevation_gain is not None else "R²/RMSE"
+    )
+    optimization_info = f"Optimization: {optimization_type}"
+    if target_elevation_gain is not None:
+        optimization_info += f" ({target_elevation_gain}m)"
+
+    optimization_text = plt.figtext(
+        0.5, 0.24, optimization_info, ha="center", fontsize=10
+    )
+
+    # Create buttons
+    skip_button = Button(ax_skip, "Skip Lap", color="lightsalmon", hovercolor="salmon")
+    optimize_button = Button(
+        ax_optimize, "Optimize", color="lightblue", hovercolor="skyblue"
+    )
+    save_button = Button(
+        ax_save, "Save Results", color="lightgreen", hovercolor="palegreen"
+    )
+
+    # Status variables to store results and state
+    results = {
+        "action": "optimize",  # default action
+        "trim_start": initial_trim_start,
+        "trim_end": initial_trim_end,
+        "cda": initial_cda,
+        "crr": initial_crr,
+        "rmse": None,
+        "r2": None,
+        "optimizing": False,
+        "saved": False,
+        "current_virtual_profile": None,  # Store the current virtual profile
+        "trimmed_df": None,  # Store the currently trimmed DataFrame
+        "trimmed_distance": None,  # Store the currently trimmed distance
+        "trimmed_elevation": None,  # Store the currently trimmed elevation
+    }
+
+    # Set up the map if libraries are available
+    map_features = {
+        "start_point_plot": None,
+        "end_point_plot": None,
+        "trim_start_line": None,
+        "trim_end_line": None,
+    }
+
+    elevation_features = {
+        "actual_line": None,
+        "virtual_line": None,
+        "residual_line": None,
+        "trim_start_line": None,
+        "trim_end_line": None,
+        "metrics_box": None,
+        "grayed_start": None,  # For gray area before trim start
+        "grayed_end": None,  # For gray area after trim end
+    }
+
+    # Calculate distances along the route for the map view
+    def calculate_route_distances():
+        if (
+            map_libs_available
+            and "latitude" in df.columns
+            and "longitude" in df.columns
+        ):
+            distances = [0]
+            total_dist = 0
+            # Calculate cumulative distance along route
+            for i in range(1, len(df)):
+                lat1, lon1 = df["latitude"].iloc[i - 1], df["longitude"].iloc[i - 1]
+                lat2, lon2 = df["latitude"].iloc[i], df["longitude"].iloc[i]
+
+                # Use haversine formula to calculate distance in meters
+                import math
+
+                R = 6371000  # Earth radius in meters
+                phi1 = math.radians(lat1)
+                phi2 = math.radians(lat2)
+                delta_phi = math.radians(lat2 - lat1)
+                delta_lambda = math.radians(lon2 - lon1)
+
+                a = math.sin(delta_phi / 2) * math.sin(delta_phi / 2) + math.cos(
+                    phi1
+                ) * math.cos(phi2) * math.sin(delta_lambda / 2) * math.sin(
+                    delta_lambda / 2
+                )
+                c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+                segment_distance = R * c
+                total_dist += segment_distance
+                distances.append(total_dist)
+            return distances
+        return None
+
+    route_distances = calculate_route_distances()
+
+    # Prepare map with route
+    def initialize_map():
+        if (
+            not map_libs_available
+            or "latitude" not in df.columns
+            or "longitude" not in df.columns
+        ):
+            ax_map.text(
+                0.5,
+                0.5,
+                "Map view not available\n(missing GPS data or libraries)",
+                ha="center",
+                va="center",
+                transform=ax_map.transAxes,
+            )
+            ax_map.set_visible(False)
+            return False
+
+        try:
+            # Create points for the full route
+            points = [
+                Point(lon, lat) for lon, lat in zip(df["longitude"], df["latitude"])
+            ]
+            route_line = LineString(points)
+
+            # Create GeoDataFrame for the route line
+            gdf_line = gpd.GeoDataFrame(geometry=[route_line], crs="EPSG:4326")
+            gdf_line = gdf_line.to_crs(epsg=3857)  # Convert to Web Mercator
+
+            # Plot original route in blue
+            gdf_line.plot(ax=ax_map, color="blue", linewidth=2, alpha=0.5)
+
+            # Initial start and end points (0% and 100% of route)
+            start_point = Point(df["longitude"].iloc[0], df["latitude"].iloc[0])
+            end_point = Point(df["longitude"].iloc[-1], df["latitude"].iloc[-1])
+
+            # Convert to GeoDataFrame
+            gdf_points = gpd.GeoDataFrame(
+                geometry=[start_point, end_point],
+                data={"type": ["start", "end"]},
+                crs="EPSG:4326",
+            )
+            gdf_points = gdf_points.to_crs(epsg=3857)
+
+            # Plot start and end points
+            map_features["start_point_plot"] = ax_map.scatter(
+                gdf_points[gdf_points["type"] == "start"].geometry.x,
+                gdf_points[gdf_points["type"] == "start"].geometry.y,
+                color="green",
+                s=100,
+                zorder=10,
+            )
+            map_features["end_point_plot"] = ax_map.scatter(
+                gdf_points[gdf_points["type"] == "end"].geometry.x,
+                gdf_points[gdf_points["type"] == "end"].geometry.y,
+                color="red",
+                s=100,
+                zorder=10,
+            )
+
+            # Add OSM background
+            bounds = gdf_line.total_bounds
+            width_meters = bounds[2] - bounds[0]
+            height_meters = bounds[3] - bounds[1]
+            max_dimension = max(width_meters, height_meters)
+
+            # Determine zoom level based on track extent
+            if max_dimension < 500:
+                zoom = 19
+            elif max_dimension < 1000:
+                zoom = 18
+            elif max_dimension < 2000:
+                zoom = 17
+            elif max_dimension < 5000:
+                zoom = 16
+            elif max_dimension < 10000:
+                zoom = 15
+            elif max_dimension < 20000:
+                zoom = 14
+            elif max_dimension < 50000:
+                zoom = 13
+            else:
+                zoom = 12
+
+            try:
+                ctx.add_basemap(
+                    ax_map, source=ctx.providers.OpenStreetMap.Mapnik, zoom=zoom
+                )
+            except Exception as e:
+                print(f"Error adding map background: {str(e)}")
+
+            # Remove axis labels for map
+            ax_map.set_axis_off()
+
+            # Add title to map
+            lap_title = f"Lap {lap_num}" if lap_num > 0 else "Combined Laps"
+            ax_map.set_title(
+                f"{lap_title} - Adjust Start and End Trim Points", fontsize=14
+            )
+
+            return True
+
+        except Exception as e:
+            print(f"Error initializing map: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
+            ax_map.text(
+                0.5,
+                0.5,
+                f"Error initializing map: {str(e)}",
+                ha="center",
+                va="center",
+                transform=ax_map.transAxes,
+            )
+            ax_map.set_visible(False)
+            return False
+
+    # Initialize elevation plot with empty data
+    def initialize_elevation_plot():
+        # Set up plots
+        ax_elevation.set_ylabel("Elevation (m)", fontsize=12)
+        lap_title = f"Lap {lap_num}" if lap_num > 0 else "Combined Laps"
+        ax_elevation.set_title(f"{lap_title} - Elevation Profiles", fontsize=14)
+        ax_elevation.grid(True, linestyle="--", alpha=0.7)
+
+        ax_residual.set_xlabel("Distance (km)", fontsize=12)
+        ax_residual.set_ylabel("Residual (m)", fontsize=12)
+        ax_residual.set_title("Elevation Difference (Actual - Virtual)", fontsize=12)
+        ax_residual.grid(True, linestyle="--", alpha=0.7)
+
+        # Convert distance to km
+        distance_km = distance / 1000
+
+        # Plot actual elevation
+        (elevation_features["actual_line"],) = ax_elevation.plot(
+            distance_km, actual_elevation, "b-", linewidth=2, label="Actual Elevation"
+        )
+
+        # Initialize virtual elevation lines - both active and inactive regions
+        virtual_data = np.zeros_like(actual_elevation)
+        virtual_data[:] = np.nan
+
+        # Active region (full opacity)
+        (elevation_features["virtual_line"],) = ax_elevation.plot(
+            distance_km, virtual_data, "r-", linewidth=2, label="Virtual Elevation"
+        )
+
+        # Inactive region (reduced opacity)
+        (elevation_features["virtual_line_inactive"],) = ax_elevation.plot(
+            [], [], "r-", linewidth=2, alpha=0.3, label="_nolegend_"
+        )
+
+        # Initialize residual lines - both active and inactive regions
+        residual_data = np.zeros_like(distance_km)
+        residual_data[:] = np.nan
+
+        # Active region (full opacity)
+        (elevation_features["residual_line"],) = ax_residual.plot(
+            distance_km, residual_data, "g-", linewidth=1.5, label="Residual"
+        )
+
+        # Inactive region (reduced opacity)
+        (elevation_features["residual_line_inactive"],) = ax_residual.plot(
+            [], [], "g-", linewidth=1.5, alpha=0.3, label="_nolegend_"
+        )
+
+        # Zero line in residual plot
+        ax_residual.axhline(y=0, color="k", linestyle="-", alpha=0.3)
+
+        # Add legend
+        ax_elevation.legend(loc="best")
+
+        # Add trim lines
+        start_km = initial_trim_start / 1000
+        end_km = (total_distance - initial_trim_end) / 1000
+
+        # Elevation plot trim lines
+        elevation_features["trim_start_line"] = ax_elevation.axvline(
+            x=start_km, color="green", linewidth=1.5, linestyle="--", visible=False
+        )
+        elevation_features["trim_end_line"] = ax_elevation.axvline(
+            x=end_km, color="red", linewidth=1.5, linestyle="--", visible=False
+        )
+
+        # Residual plot trim lines
+        elevation_features["residual_trim_start"] = ax_residual.axvline(
+            x=start_km, color="green", linewidth=1.5, linestyle="--", visible=False
+        )
+        elevation_features["residual_trim_end"] = ax_residual.axvline(
+            x=end_km, color="red", linewidth=1.5, linestyle="--", visible=False
+        )
+
+        # Initialize storage for grayed areas
+        elevation_features["ylim"] = (
+            np.min(actual_elevation) - 10,
+            np.max(actual_elevation) + 10,
+        )
+        elevation_features["res_ylim"] = (-10, 10)
+        elevation_features["grayed_start"] = None
+        elevation_features["grayed_end"] = None
+        elevation_features["res_grayed_start"] = None
+        elevation_features["res_grayed_end"] = None
+
+        # Add metrics text box
+        props = dict(boxstyle="round", facecolor="wheat", alpha=0.5)
+        metrics_text = "Press 'Optimize' to start analysis"
+        elevation_features["metrics_box"] = ax_elevation.text(
+            0.95,
+            0.95,
+            metrics_text,
+            transform=ax_elevation.transAxes,
+            fontsize=10,
+            verticalalignment="top",
+            horizontalalignment="right",
+            bbox=props,
+        )
+
+    # Function to update the map trim points
+    def update_map_trim_points(trim_start, trim_end):
+        if not map_libs_available:
+            return
+
+        try:
+            # Find indices corresponding to the trim distances
+            start_idx = 0
+            end_idx = len(distance) - 1
+
+            for i, dist in enumerate(distance):
+                if dist >= trim_start:
+                    start_idx = i
+                    break
+
+            for i in range(len(distance) - 1, -1, -1):
+                if distance[i] <= (total_distance - trim_end):
+                    end_idx = i
+                    break
+
+            # Update map points if we have them
+            if (
+                map_features["start_point_plot"] is not None
+                and "latitude" in df.columns
+            ):
+                # Update start point
+                start_lon, start_lat = (
+                    df["longitude"].iloc[start_idx],
+                    df["latitude"].iloc[start_idx],
+                )
+                start_point = Point(start_lon, start_lat)
+                gdf_start = gpd.GeoDataFrame(
+                    geometry=[start_point], crs="EPSG:4326"
+                ).to_crs(epsg=3857)
+
+                map_features["start_point_plot"].set_offsets(
+                    [[gdf_start.geometry.x.iloc[0], gdf_start.geometry.y.iloc[0]]]
+                )
+
+                # Update end point
+                end_lon, end_lat = (
+                    df["longitude"].iloc[end_idx],
+                    df["latitude"].iloc[end_idx],
+                )
+                end_point = Point(end_lon, end_lat)
+                gdf_end = gpd.GeoDataFrame(
+                    geometry=[end_point], crs="EPSG:4326"
+                ).to_crs(epsg=3857)
+
+                map_features["end_point_plot"].set_offsets(
+                    [[gdf_end.geometry.x.iloc[0], gdf_end.geometry.y.iloc[0]]]
+                )
+
+        except Exception as e:
+            print(f"Error updating map trim points: {str(e)}")
+
+    def update_elevation_trim_lines(trim_start, trim_end):
+        try:
+            # Convert to km for the plot
+            start_km = trim_start / 1000
+            end_km = (total_distance - trim_end) / 1000
+
+            # Update the trim lines with proper sequences
+            elevation_features["trim_start_line"].set_xdata([start_km, start_km])
+            elevation_features["trim_start_line"].set_visible(True)
+
+            elevation_features["trim_end_line"].set_xdata([end_km, end_km])
+            elevation_features["trim_end_line"].set_visible(True)
+
+            elevation_features["residual_trim_start"].set_xdata([start_km, start_km])
+            elevation_features["residual_trim_start"].set_visible(True)
+
+            elevation_features["residual_trim_end"].set_xdata([end_km, end_km])
+            elevation_features["residual_trim_end"].set_visible(True)
+
+            # Remove old grayed areas
+            for area in [
+                "grayed_start",
+                "grayed_end",
+                "res_grayed_start",
+                "res_grayed_end",
+            ]:
+                if area in elevation_features and elevation_features[area] is not None:
+                    try:
+                        elevation_features[area].remove()
+                    except:
+                        pass
+                    elevation_features[area] = None
+
+            # Get current y-limits
+            y_min, y_max = elevation_features["ylim"]
+            res_y_min, res_y_max = elevation_features["res_ylim"]
+
+            # Gray out areas with reduced opacity (0.15)
+            if start_km > 0:
+                # For elevation plot
+                start_x = np.linspace(0, start_km, 100)
+                start_y_min = np.ones_like(start_x) * y_min
+                start_y_max = np.ones_like(start_x) * y_max
+
+                elevation_features["grayed_start"] = ax_elevation.fill_between(
+                    start_x, start_y_min, start_y_max, color="gray", alpha=0.15
+                )
+
+                # For residual plot
+                res_start_y_min = np.ones_like(start_x) * res_y_min
+                res_start_y_max = np.ones_like(start_x) * res_y_max
+
+                elevation_features["res_grayed_start"] = ax_residual.fill_between(
+                    start_x, res_start_y_min, res_start_y_max, color="gray", alpha=0.15
+                )
+
+            if end_km < total_distance / 1000:
+                # For elevation plot
+                end_x = np.linspace(end_km, total_distance / 1000, 100)
+                end_y_min = np.ones_like(end_x) * y_min
+                end_y_max = np.ones_like(end_x) * y_max
+
+                elevation_features["grayed_end"] = ax_elevation.fill_between(
+                    end_x, end_y_min, end_y_max, color="gray", alpha=0.15
+                )
+
+                # For residual plot
+                res_end_y_min = np.ones_like(end_x) * res_y_min
+                res_end_y_max = np.ones_like(end_x) * res_y_max
+
+                elevation_features["res_grayed_end"] = ax_residual.fill_between(
+                    end_x, res_end_y_min, res_end_y_max, color="gray", alpha=0.15
+                )
+
+        except Exception as e:
+            print(f"Error updating elevation trim lines: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
+
+    # Function to run optimization with current parameters
+    def run_optimization():
+        if results["optimizing"]:
+            return
+
+        results["optimizing"] = True
+        optimize_button.label.set_text("Optimizing...")
+        optimize_button.color = "yellow"
+        fig.canvas.draw_idle()
+
+        try:
+            # Get trim values from sliders
+            trim_start = trim_start_slider.val
+            trim_end = trim_end_slider.val
+
+            # Find indices corresponding to the trim distances
+            start_idx = 0
+            end_idx = len(distance) - 1
+
+            for i, dist in enumerate(distance):
+                if dist >= trim_start:
+                    start_idx = i
+                    break
+
+            for i in range(len(distance) - 1, -1, -1):
+                if distance[i] <= (total_distance - trim_end):
+                    end_idx = i
+                    break
+
+            # Extract just the trimmed section for optimization
+            trimmed_df = df.iloc[start_idx : end_idx + 1].copy()
+            trimmed_distance = distance[start_idx : end_idx + 1] - distance[start_idx]
+            trimmed_elevation = actual_elevation[start_idx : end_idx + 1]
+
+            # Store the trimmed data for later use
+            results["trimmed_df"] = trimmed_df
+            results["trimmed_distance"] = trimmed_distance
+            results["trimmed_elevation"] = trimmed_elevation
+
+            # Check if we have enough data points after trimming
+            if len(trimmed_df) < 10:
+                elevation_features["metrics_box"].set_text(
+                    "Error: Not enough data points after trimming\n"
+                    "Adjust trim sliders and try again"
+                )
+                fig.canvas.draw_idle()
+                results["optimizing"] = False
+                optimize_button.label.set_text("Optimize")
+                optimize_button.color = "lightblue"
+                return
+
+            # Recalculate dt if time data is available
+            if "timestamp" in trimmed_df.columns:
+                dt_values = trimmed_df["timestamp"].diff().dt.total_seconds()
+                avg_dt = dt_values[1:].mean()  # skip first row which is NaN
+                adjusted_dt = avg_dt if not np.isnan(avg_dt) else dt
+            else:
+                adjusted_dt = dt
+
+            # Calculate acceleration if needed
+            if "a" not in trimmed_df.columns:
+                from core.calculations import accel_calc
+
+                trimmed_df["a"] = accel_calc(trimmed_df["v"].values, adjusted_dt)
+
+            # Use optimization function if provided - ONLY OPTIMIZE THE ACTIVE REGION
+            if optimization_function is not None:
+                # Call the optimization function with trimmed data, passing target_elevation_gain
+                optimized_cda, optimized_crr, rmse, r2, virtual_profile = (
+                    optimization_function(
+                        df=trimmed_df,
+                        actual_elevation=trimmed_elevation,
+                        kg=rider_mass,
+                        rho=air_density,
+                        dt=adjusted_dt,
+                        initial_cda=cda_slider.val,
+                        initial_crr=crr_slider.val,
+                        target_elevation_gain=target_elevation_gain,
+                    )
+                )
+            else:
+                # No optimization function, calculate with current parameters
+                optimized_cda = cda_slider.val
+                optimized_crr = crr_slider.val
+
+                # Calculate virtual elevation with current parameters for trimmed region
+                ve_changes = delta_ve(
+                    cda=optimized_cda,
+                    crr=optimized_crr,
+                    df=trimmed_df,
+                    vw=vw,
+                    kg=rider_mass,
+                    rho=air_density,
+                    dt=adjusted_dt,
+                    eta=eta,
+                )
+
+                # Build virtual elevation profile for trimmed region
+                virtual_profile = calculate_virtual_profile(
+                    ve_changes, trimmed_elevation, lap_column, trimmed_df
+                )
+
+                # Calculate stats
+                rmse = np.sqrt(np.mean((virtual_profile - trimmed_elevation) ** 2))
+                r2 = pearsonr(virtual_profile, trimmed_elevation)[0] ** 2
+
+            # Store results
+            results["cda"] = optimized_cda
+            results["crr"] = optimized_crr
+            results["rmse"] = rmse
+            results["r2"] = r2
+            results["current_virtual_profile"] = virtual_profile
+
+            # Update sliders to match optimized values
+            cda_slider.set_val(optimized_cda)
+            crr_slider.set_val(optimized_crr)
+
+            # Update plots with the new virtual profile - will calculate full profile
+            update_elevation_plot(
+                trimmed_distance,
+                trimmed_elevation,
+                virtual_profile,
+                optimized_cda,
+                optimized_crr,
+                rmse,
+                r2,
+            )
+
+        except Exception as e:
+            print(f"Error during optimization: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
+            elevation_features["metrics_box"].set_text(f"Optimization error: {str(e)}")
+
+        finally:
+            results["optimizing"] = False
+            optimize_button.label.set_text("Optimize")
+            optimize_button.color = "lightblue"
+            fig.canvas.draw_idle()
+
+    # Function to update elevation plot with new data
+    def update_elevation_plot(
+        trimmed_distance, trimmed_elevation, virtual_profile, cda, crr, rmse, r2
+    ):
+        try:
+            # Use full distance range for display
+            distance_km = distance / 1000
+
+            # Find active region indices
+            start_idx = 0
+            end_idx = len(distance) - 1
+
+            for i, dist in enumerate(distance):
+                if dist >= trim_start_slider.val:
+                    start_idx = i
+                    break
+
+            for i in range(len(distance) - 1, -1, -1):
+                if distance[i] <= (total_distance - trim_end_slider.val):
+                    end_idx = i
+                    break
+
+            # Show complete actual elevation profile
+            elevation_features["actual_line"].set_xdata(distance_km)
+            elevation_features["actual_line"].set_ydata(actual_elevation)
+
+            # Calculate virtual elevation for the FULL profile
+            ve_changes = delta_ve(
+                cda=cda,
+                crr=crr,
+                df=df,
+                vw=vw,
+                kg=rider_mass,
+                rho=air_density,
+                dt=dt,
+                eta=eta,
+            )
+
+            # Build full virtual elevation profile
+            full_virtual = calculate_virtual_profile(
+                ve_changes, actual_elevation, lap_column, df
+            )
+
+            # Split virtual elevation into active and inactive regions
+            active_x = distance_km[start_idx : end_idx + 1]
+            active_y = full_virtual[start_idx : end_idx + 1]
+
+            # Split inactive regions into pre and post sections
+            pre_x = distance_km[:start_idx] if start_idx > 0 else []
+            pre_y = full_virtual[:start_idx] if start_idx > 0 else []
+
+            post_x = (
+                distance_km[end_idx + 1 :] if end_idx < len(distance_km) - 1 else []
+            )
+            post_y = (
+                full_virtual[end_idx + 1 :] if end_idx < len(full_virtual) - 1 else []
+            )
+
+            # Update active line (full opacity)
+            elevation_features["virtual_line"].set_xdata(active_x)
+            elevation_features["virtual_line"].set_ydata(active_y)
+            elevation_features["virtual_line"].set_visible(True)
+
+            # FIXED: Handle pre and post regions as separate lines
+            # Create pre-trim line if it doesn't exist
+            if "virtual_line_pre" not in elevation_features:
+                (elevation_features["virtual_line_pre"],) = ax_elevation.plot(
+                    [], [], "r-", linewidth=2, alpha=0.3, label="_nolegend_"
+                )
+
+            # Create post-trim line if it doesn't exist
+            if "virtual_line_post" not in elevation_features:
+                (elevation_features["virtual_line_post"],) = ax_elevation.plot(
+                    [], [], "r-", linewidth=2, alpha=0.3, label="_nolegend_"
+                )
+
+            # Update pre-trim line
+            elevation_features["virtual_line_pre"].set_xdata(pre_x)
+            elevation_features["virtual_line_pre"].set_ydata(pre_y)
+            elevation_features["virtual_line_pre"].set_visible(len(pre_x) > 0)
+
+            # Update post-trim line
+            elevation_features["virtual_line_post"].set_xdata(post_x)
+            elevation_features["virtual_line_post"].set_ydata(post_y)
+            elevation_features["virtual_line_post"].set_visible(len(post_x) > 0)
+
+            # Hide the old inactive line if it exists
+            if "virtual_line_inactive" in elevation_features:
+                elevation_features["virtual_line_inactive"].set_visible(False)
+
+            # Calculate residuals (full profile)
+            full_residuals = actual_elevation - full_virtual
+
+            # Get the residual value at trim start point to offset residuals
+            residual_offset = (
+                full_residuals[start_idx] if start_idx < len(full_residuals) else 0
+            )
+
+            # Zero the residuals at trim start point
+            adjusted_residuals = full_residuals - residual_offset
+
+            # Split residuals into active and inactive regions
+            active_res_x = distance_km[start_idx : end_idx + 1]
+            active_res_y = adjusted_residuals[start_idx : end_idx + 1]
+
+            # Split inactive regions for residuals
+            pre_res_x = distance_km[:start_idx] if start_idx > 0 else []
+            pre_res_y = adjusted_residuals[:start_idx] if start_idx > 0 else []
+
+            post_res_x = (
+                distance_km[end_idx + 1 :] if end_idx < len(distance_km) - 1 else []
+            )
+            post_res_y = (
+                adjusted_residuals[end_idx + 1 :]
+                if end_idx < len(adjusted_residuals) - 1
+                else []
+            )
+
+            # Update residual lines
+            elevation_features["residual_line"].set_xdata(active_res_x)
+            elevation_features["residual_line"].set_ydata(active_res_y)
+            elevation_features["residual_line"].set_visible(True)
+
+            # FIXED: Handle pre and post residual regions as separate lines
+            # Create pre-trim residual line if it doesn't exist
+            if "residual_line_pre" not in elevation_features:
+                (elevation_features["residual_line_pre"],) = ax_residual.plot(
+                    [], [], "g-", linewidth=1.5, alpha=0.3, label="_nolegend_"
+                )
+
+            # Create post-trim residual line if it doesn't exist
+            if "residual_line_post" not in elevation_features:
+                (elevation_features["residual_line_post"],) = ax_residual.plot(
+                    [], [], "g-", linewidth=1.5, alpha=0.3, label="_nolegend_"
+                )
+
+            # Update pre-trim residual line
+            elevation_features["residual_line_pre"].set_xdata(pre_res_x)
+            elevation_features["residual_line_pre"].set_ydata(pre_res_y)
+            elevation_features["residual_line_pre"].set_visible(len(pre_res_x) > 0)
+
+            # Update post-trim residual line
+            elevation_features["residual_line_post"].set_xdata(post_res_x)
+            elevation_features["residual_line_post"].set_ydata(post_res_y)
+            elevation_features["residual_line_post"].set_visible(len(post_res_y) > 0)
+
+            # Hide the old inactive residual line if it exists
+            if "residual_line_inactive" in elevation_features:
+                elevation_features["residual_line_inactive"].set_visible(False)
+
+            # Update metrics text
+            optimization_type_text = ""
+            if target_elevation_gain is not None:
+                trimmed_gain = virtual_profile[-1] - virtual_profile[0]
+                optimization_type_text = f"Target: {target_elevation_gain:.1f}m, Actual: {trimmed_gain:.1f}m\n"
+
+            metrics_text = (
+                f"CdA: {cda:.4f} m²\n"
+                f"Crr: {crr:.5f}\n"
+                f"RMSE: {rmse:.2f} m\n"
+                f"R²: {r2:.4f}\n"
+                + optimization_type_text
+                + f"Trim: {trim_start_slider.val:.0f}m start, {trim_end_slider.val:.0f}m end\n"
+                + f"Active region metrics only"
+            )
+            elevation_features["metrics_box"].set_text(metrics_text)
+
+            # Update plot limits
+            ax_elevation.relim()
+            ax_elevation.autoscale_view()
+            ax_residual.relim()
+            ax_residual.autoscale_view()
+
+            # Update y-limits for grayed areas
+            elevation_features["ylim"] = ax_elevation.get_ylim()
+            elevation_features["res_ylim"] = ax_residual.get_ylim()
+
+        except Exception as e:
+            print(f"Error updating elevation plot: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
+
+    # Function to handle trimming slider updates
+    def update_trimming(val):
+        # Get current values
+        trim_start = trim_start_slider.val
+        trim_end = trim_end_slider.val
+
+        # Calculate minimum distance needed for 30 seconds of data
+        avg_speed = df["v"].mean()
+        min_distance_for_30s = max(30 * avg_speed, 10)  # At least 10m or 30s of data
+
+        # Check if current trim values would leave enough data
+        remaining_distance = total_distance - trim_start - trim_end
+        if remaining_distance < min_distance_for_30s:
+            # If the user is adjusting the start slider
+            if val == trim_start:
+                # Adjust the end trim to ensure we have enough data
+                new_trim_end = total_distance - trim_start - min_distance_for_30s
+                # Only if new_trim_end is valid
+                if new_trim_end >= 0:
+                    trim_end = new_trim_end
+                    # Update slider without triggering another update
+                    trim_end_slider.eventson = False
+                    trim_end_slider.set_val(trim_end)
+                    trim_end_slider.eventson = True
+                else:
+                    # Adjust start instead
+                    trim_start = total_distance - trim_end - min_distance_for_30s
+                    # Update slider without triggering another update
+                    trim_start_slider.eventson = False
+                    trim_start_slider.set_val(trim_start)
+                    trim_start_slider.eventson = True
+            else:
+                # User is adjusting end slider, adjust start instead
+                new_trim_start = total_distance - trim_end - min_distance_for_30s
+                # Only if new_trim_start is valid
+                if new_trim_start >= 0:
+                    trim_start = new_trim_start
+                    # Update slider without triggering another update
+                    trim_start_slider.eventson = False
+                    trim_start_slider.set_val(trim_start)
+                    trim_start_slider.eventson = True
+                else:
+                    # Adjust end instead
+                    trim_end = total_distance - trim_start - min_distance_for_30s
+                    # Update slider without triggering another update
+                    trim_end_slider.eventson = False
+                    trim_end_slider.set_val(trim_end)
+                    trim_end_slider.eventson = True
+
+        # Store in results
+        results["trim_start"] = trim_start
+        results["trim_end"] = trim_end
+
+        # Update map and elevation plot trim indicators
+        update_map_trim_points(trim_start, trim_end)
+        update_elevation_trim_lines(trim_start, trim_end)
+
+        # Update metrics text with current trim values
+        if elevation_features["metrics_box"] is not None:
+            current_text = elevation_features["metrics_box"].get_text()
+            if "Trim:" in current_text:
+                # Replace the trim line
+                lines = current_text.split("\n")
+                for i, line in enumerate(lines):
+                    if line.startswith("Trim:"):
+                        lines[i] = f"Trim: {trim_start:.0f}m start, {trim_end:.0f}m end"
+                elevation_features["metrics_box"].set_text("\n".join(lines))
+
+        # Re-trim if we have already optimized
+        if results["current_virtual_profile"] is not None:
+            # Find indices corresponding to the trim distances
+            start_idx = 0
+            end_idx = len(distance) - 1
+
+            for i, dist in enumerate(distance):
+                if dist >= trim_start:
+                    start_idx = i
+                    break
+
+            for i in range(len(distance) - 1, -1, -1):
+                if distance[i] <= (total_distance - trim_end):
+                    end_idx = i
+                    break
+
+            # Trim the data
+            trimmed_df = df.iloc[start_idx : end_idx + 1].copy()
+            trimmed_distance = distance[start_idx : end_idx + 1] - distance[start_idx]
+            trimmed_elevation = actual_elevation[start_idx : end_idx + 1]
+
+            # Store the trimmed data for later use
+            results["trimmed_df"] = trimmed_df
+            results["trimmed_distance"] = trimmed_distance
+            results["trimmed_elevation"] = trimmed_elevation
+
+            # Check if we have enough data points after trimming
+            if len(trimmed_df) < 10:
+                elevation_features["metrics_box"].set_text(
+                    "Error: Not enough data points after trimming\n"
+                    "Adjust trim sliders and try again"
+                )
+                fig.canvas.draw_idle()
+                return
+
+            # Update plots with current optimized parameters but new trimming
+            current_cda = cda_slider.val
+            current_crr = crr_slider.val
+
+            # Calculate virtual elevation with current parameters
+            ve_changes = delta_ve(
+                cda=current_cda,
+                crr=current_crr,
+                df=trimmed_df,
+                vw=vw,
+                kg=rider_mass,
+                rho=air_density,
+                dt=dt,
+                eta=eta,
+            )
+
+            # Build virtual elevation profile
+            virtual_profile = calculate_virtual_profile(
+                ve_changes, trimmed_elevation, lap_column, trimmed_df
+            )
+
+            # Calculate stats
+            rmse = np.sqrt(np.mean((virtual_profile - trimmed_elevation) ** 2))
+            r2 = pearsonr(virtual_profile, trimmed_elevation)[0] ** 2
+
+            # Store results
+            results["rmse"] = rmse
+            results["r2"] = r2
+            results["current_virtual_profile"] = virtual_profile
+
+            # Update plots with the new virtual profile
+            update_elevation_plot(
+                trimmed_distance,
+                trimmed_elevation,
+                virtual_profile,
+                current_cda,
+                current_crr,
+                rmse,
+                r2,
+            )
+
+        # Redraw
+        fig.canvas.draw_idle()
+
+    # Function to handle parameter slider updates
+    def update_parameters(val):
+        # Only update if we're not in the middle of optimization
+        if results["optimizing"]:
+            return
+
+        # Get current values
+        cda = cda_slider.val
+        crr = crr_slider.val
+
+        # Store in results
+        results["cda"] = cda
+        results["crr"] = crr
+
+        # Skip if we don't have trimmed data yet
+        if results["trimmed_df"] is None:
+            return
+
+        trimmed_df = results["trimmed_df"]
+        trimmed_distance = results["trimmed_distance"]
+        trimmed_elevation = results["trimmed_elevation"]
+
+        # Check if we have enough data points
+        if len(trimmed_df) < 10:
+            return
+
+        # Recalculate dt if time data is available
+        if "timestamp" in trimmed_df.columns:
+            dt_values = trimmed_df["timestamp"].diff().dt.total_seconds()
+            avg_dt = dt_values[1:].mean()  # skip first row which is NaN
+            adjusted_dt = avg_dt if not np.isnan(avg_dt) else dt
+        else:
+            adjusted_dt = dt
+
+        # Calculate acceleration if needed
+        if "a" not in trimmed_df.columns:
+            from core.calculations import accel_calc
+
+            trimmed_df["a"] = accel_calc(trimmed_df["v"].values, adjusted_dt)
+
+        # Calculate virtual elevation with current parameters
+        ve_changes = delta_ve(
+            cda=cda,
+            crr=crr,
+            df=trimmed_df,
+            vw=vw,
+            kg=rider_mass,
+            rho=air_density,
+            dt=adjusted_dt,
+            eta=eta,
+        )
+
+        # Build virtual elevation profile
+        virtual_profile = calculate_virtual_profile(
+            ve_changes, trimmed_elevation, lap_column, trimmed_df
+        )
+
+        # Calculate stats
+        rmse = np.sqrt(np.mean((virtual_profile - trimmed_elevation) ** 2))
+        r2 = pearsonr(virtual_profile, trimmed_elevation)[0] ** 2
+
+        # Store results
+        results["rmse"] = rmse
+        results["r2"] = r2
+        results["current_virtual_profile"] = virtual_profile
+
+        # Update plots
+        update_elevation_plot(
+            trimmed_distance, trimmed_elevation, virtual_profile, cda, crr, rmse, r2
+        )
+
+    # Button callbacks
+    def on_skip(event):
+        results["action"] = "skip"
+        plt.close(fig)
+
+    def on_optimize(event):
+        if not results["optimizing"]:
+            run_optimization()
+
+    def on_save(event):
+        results["action"] = "save"
+        results["saved"] = True
+        save_button.label.set_text("Saved!")
+        save_button.color = "palegreen"
+        fig.canvas.draw_idle()
+        plt.close(fig)
+
+    # Connect callbacks
+    trim_start_slider.on_changed(update_trimming)
+    trim_end_slider.on_changed(update_trimming)
+    cda_slider.on_changed(update_parameters)
+    crr_slider.on_changed(update_parameters)
+
+    skip_button.on_clicked(on_skip)
+    optimize_button.on_clicked(on_optimize)
+    save_button.on_clicked(on_save)
+
+    # Initialize the plot components
+    map_initialized = initialize_map()
+    initialize_elevation_plot()
+
+    # Set initial trim lines
+    update_trimming(None)
+
+    # Save a screenshot if requested
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    # Run initial optimization
+    run_optimization()
+
+    # Show the plot (blocks until closed)
+    plt.show()
+
+    # Return results
+    return (
+        results["action"],
+        results["trim_start"],
+        results["trim_end"],
+        results["cda"],
+        results["crr"],
+        results["rmse"],
+        results["r2"],
+    )
