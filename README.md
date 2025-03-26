@@ -43,6 +43,7 @@ python ve_analyzer.py <fit_file> --mass <rider_mass_kg> --rho <air_density_kg_m3
 - `--selected-laps`: Comma-separated list of lap numbers to analyze together (e.g., "2,4,6,8,10")
 - `--cda`: Fixed CdA value to use (if provided, only Crr will be optimized)
 - `--crr`: Fixed Crr value to use (if provided, only CdA will be optimized)
+- `--eta`: Drivetrain efficiency (default: 0.98)
 - `--debug`: Enable debug output
 - `--show-map`: Display route maps for analyzed laps (static and interactive versions)
 - `--trim-distance`: Distance in meters to trim from start and end of recording (default: 0)

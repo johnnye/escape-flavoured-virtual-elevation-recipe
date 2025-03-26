@@ -443,6 +443,7 @@ def analyze_lap_data(
     rider_mass,
     air_density,
     fit_file_path,  # Added parameter to get filename
+    eta=0.98,
     resample_freq="1s",
     save_dir=None,
     min_lap_duration=30,
@@ -672,7 +673,7 @@ def analyze_lap_data(
                         kg=kg,
                         rho=rho,
                         dt=dt,
-                        eta=0.98,
+                        eta=eta,
                     )
 
                     # Build virtual elevation profile
@@ -702,6 +703,7 @@ def analyze_lap_data(
                         kg=kg,
                         rho=rho,
                         dt=dt,
+                        eta=eta,
                         target_elevation_gain=target_elevation_gain,
                         is_combined_laps=False if lap_num > 0 else True,
                     )
@@ -720,6 +722,7 @@ def analyze_lap_data(
                         kg=kg,
                         rho=rho,
                         dt=dt,
+                        eta=eta,
                         target_elevation_gain=target_elevation_gain,
                         is_combined_laps=False if lap_num > 0 else True,
                     )
@@ -739,6 +742,7 @@ def analyze_lap_data(
                         kg=kg,
                         rho=rho,
                         dt=dt,
+                        eta=eta,
                         target_elevation_gain=target_elevation_gain,
                         is_combined_laps=False if lap_num > 0 else True,
                     )
@@ -758,7 +762,7 @@ def analyze_lap_data(
                         kg=kg,
                         rho=rho,
                         dt=dt,
-                        eta=0.98,
+                        eta=eta,
                     )
                     # Build virtual elevation profile
                     virtual_elevation = calculate_virtual_profile(
@@ -783,6 +787,7 @@ def analyze_lap_data(
                         kg=kg,
                         rho=rho,
                         dt=dt,
+                        eta=eta,
                         r2_weight=r2_weight,
                         crr_bounds=crr_bounds,
                     )
@@ -799,6 +804,7 @@ def analyze_lap_data(
                         kg=kg,
                         rho=rho,
                         dt=dt,
+                        eta=eta,
                         r2_weight=r2_weight,
                         cda_bounds=cda_bounds,
                     )
@@ -814,6 +820,7 @@ def analyze_lap_data(
                         kg=kg,
                         rho=rho,
                         dt=dt,
+                        eta=eta,
                         r2_weight=r2_weight,
                         n_grid=n_grid,
                         cda_bounds=cda_bounds,
@@ -850,6 +857,7 @@ def analyze_lap_data(
                 initial_trim_start=initial_trim_start,
                 initial_trim_end=initial_trim_end,
                 dt=dt,
+                eta=eta,
                 cda_range=cda_bounds,
                 crr_range=crr_bounds,
                 save_path=map_save_path,
@@ -928,7 +936,7 @@ def analyze_lap_data(
                 kg=rider_mass,
                 rho=air_density,
                 dt=dt,
-                eta=0.98,
+                eta=eta,
             )
             virtual_profile = calculate_virtual_profile(
                 ve_changes, trimmed_df["elevation"].values, None, trimmed_df
@@ -984,6 +992,7 @@ def analyze_lap_data(
                     kg=rider_mass,
                     rho=air_density,
                     dt=dt,
+                    eta=eta,
                     save_path=save_path,
                     fixed_cda=fixed_cda,
                     fixed_crr=fixed_crr,
@@ -1089,6 +1098,7 @@ def analyze_combined_laps(
     rider_mass,
     air_density,
     fit_file_path,  # Added parameter to get filename
+    eta=0.98,
     resample_freq="1s",
     save_dir=None,
     min_lap_duration=30,
@@ -1327,7 +1337,7 @@ def analyze_combined_laps(
                     kg=kg,
                     rho=rho,
                     dt=dt,
-                    eta=0.98,
+                    eta=eta,
                 )
 
                 # Build virtual elevation profile
@@ -1357,6 +1367,7 @@ def analyze_combined_laps(
                     kg=kg,
                     rho=rho,
                     dt=dt,
+                    eta=eta,
                     target_elevation_gain=target_elevation_gain,
                     is_combined_laps=True,  # Always true for combined laps
                 )
@@ -1375,6 +1386,7 @@ def analyze_combined_laps(
                     kg=kg,
                     rho=rho,
                     dt=dt,
+                    eta=eta,
                     target_elevation_gain=target_elevation_gain,
                     is_combined_laps=True,  # Always true for combined laps
                 )
@@ -1392,6 +1404,7 @@ def analyze_combined_laps(
                     kg=kg,
                     rho=rho,
                     dt=dt,
+                    eta=eta,
                     target_elevation_gain=target_elevation_gain,
                     is_combined_laps=True,  # Always true for combined laps
                 )
@@ -1411,7 +1424,7 @@ def analyze_combined_laps(
                     kg=kg,
                     rho=rho,
                     dt=dt,
-                    eta=0.98,
+                    eta=eta,
                 )
                 # Build virtual elevation profile
                 virtual_elevation = calculate_virtual_profile(
@@ -1436,6 +1449,7 @@ def analyze_combined_laps(
                     kg=kg,
                     rho=rho,
                     dt=dt,
+                    eta=eta,
                     r2_weight=r2_weight,
                     crr_bounds=crr_bounds,
                 )
@@ -1452,6 +1466,7 @@ def analyze_combined_laps(
                     kg=kg,
                     rho=rho,
                     dt=dt,
+                    eta=eta,
                     r2_weight=r2_weight,
                     cda_bounds=cda_bounds,
                 )
@@ -1467,6 +1482,7 @@ def analyze_combined_laps(
                     kg=kg,
                     rho=rho,
                     dt=dt,
+                    eta=eta,
                     r2_weight=r2_weight,
                     n_grid=n_grid,
                     cda_bounds=cda_bounds,
@@ -1502,6 +1518,7 @@ def analyze_combined_laps(
             initial_trim_start=initial_trim_start,
             initial_trim_end=initial_trim_end,
             dt=dt,
+            eta=eta,
             cda_range=cda_bounds,
             crr_range=crr_bounds,
             save_path=map_save_path,
@@ -1577,7 +1594,7 @@ def analyze_combined_laps(
             kg=rider_mass,
             rho=air_density,
             dt=dt,
-            eta=0.98,
+            eta=eta,
         )
         virtual_profile = calculate_virtual_profile(
             ve_changes, trimmed_df["elevation"].values, "lap_number", trimmed_df
@@ -1668,6 +1685,7 @@ def analyze_combined_laps(
                     kg=rider_mass,
                     rho=air_density,
                     dt=dt,
+                    eta=eta,
                     save_path=save_path,
                     lap_column="lap_number",
                     fixed_cda=fixed_cda,
@@ -1688,6 +1706,7 @@ def analyze_combined_laps(
                     kg=rider_mass,
                     rho=air_density,
                     dt=dt,
+                    eta=eta,
                     save_path=save_path,
                     lap_column="lap_number",
                     fixed_cda=fixed_cda,
@@ -1708,6 +1727,7 @@ def analyze_combined_laps(
                     kg=rider_mass,
                     rho=air_density,
                     dt=dt,
+                    eta=eta,
                     save_path=save_path,
                     lap_column="lap_number",
                     fixed_cda=fixed_cda,
@@ -1728,6 +1748,7 @@ def analyze_combined_laps(
                     kg=rider_mass,
                     rho=air_density,
                     dt=dt,
+                    eta=eta,
                     save_path=save_path,
                     lap_column="lap_number",
                     fixed_cda=fixed_cda,
@@ -2128,6 +2149,12 @@ def main():
         default=None,
         help="Optimize for a specific elevation gain (in meters). For individual lap analysis, this is the target gain per lap. For combined lap analysis (--selected-laps), this is the target total gain across all selected laps.",
     )
+    parser.add_argument(
+        "--eta",
+        type=float,
+        default=0.98,
+        help="Drivetrain efficiency (default: 0.98)",
+    )
 
     # Interactive mode parameter
     parser.add_argument(
@@ -2183,6 +2210,7 @@ def main():
     print("\nAnalysis Parameters:")
     print(f"Rider mass: {args.mass} kg")
     print(f"Air density: {args.rho} kg/m³")
+    print(f"Drivetrain efficiency: {args.eta}")
     print(f"Resampling: {args.resample}")
     print(f"Output directory: {args.output}")
     print(f"Minimum lap duration: {args.min_lap} seconds")
@@ -2233,6 +2261,7 @@ def main():
                 rider_mass=args.mass,
                 air_density=args.rho,
                 fit_file_path=args.fit_file,  # Added parameter
+                eta=args.eta,
                 resample_freq=args.resample,
                 save_dir=args.output,
                 min_lap_duration=args.min_lap,
@@ -2288,6 +2317,7 @@ def main():
         rider_mass=args.mass,
         air_density=args.rho,
         fit_file_path=args.fit_file,  # Added parameter
+        eta=args.eta,
         resample_freq=args.resample,
         save_dir=args.output,
         min_lap_duration=args.min_lap,
