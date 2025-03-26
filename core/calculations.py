@@ -1,5 +1,7 @@
 import numpy as np
 
+from core.config import VirtualElevationConfig
+
 
 def accel_calc(v, dt):
     """
@@ -211,17 +213,13 @@ def should_reset_elevation(current_lap, next_lap):
 
 
 def delta_ve(
+    config: VirtualElevationConfig,
     cda,
     crr=0.005,
     df=None,
     v=None,
     watts=None,
     a=None,
-    vw=0,
-    kg=None,
-    rho=None,
-    dt=1,
-    eta=0.98,
 ):
     """
     Calculate virtual elevation change.
@@ -242,27 +240,25 @@ def delta_ve(
     Returns:
         numpy.ndarray: Virtual elevation changes
     """
-    if kg is None or rho is None:
+    if config.kg is None or config.rho is None:
         raise ValueError(
             "Rider mass (kg) and air density (rho) are required parameters"
         )
 
     if df is not None:
-        w = df["watts"].values * eta
+        w = df["watts"].values * config.eta
         acc = df["a"].values
         vg = df["v"].values
     else:
-        w = np.array(watts) * eta
+        w = np.array(watts) * config.eta
         acc = np.array(a)
         vg = np.array(v)
 
     # Use our fixed virtual_slope function to calculate slope
-    slope = virtual_slope(
-        cda=cda, crr=crr, v=vg, watts=w, a=acc, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-    )
+    slope = virtual_slope(config, cda=cda, crr=crr, v=vg, watts=w, a=acc)
 
     # Calculate virtual elevation change
-    return vg * dt * np.sin(np.arctan(slope))
+    return vg * config.dt * np.sin(np.arctan(slope))
 
 
 def lap_work(W, vg, vw=0, kg=None, rho=None, dt=1, eta=0.98):
@@ -387,17 +383,13 @@ def v_est(w, cda=0.25, crr=0.005, rho=None, kg=None, vw=0, slope=0):
 
 
 def virtual_slope(
+    config: VirtualElevationConfig,
     cda,
     crr=0.005,
     df=None,
     v=None,
     watts=None,
     a=None,
-    vw=0,
-    kg=None,
-    rho=None,
-    dt=1,
-    eta=0.98,
 ):
     """
     Calculate virtual slope.
@@ -418,17 +410,17 @@ def virtual_slope(
     Returns:
         numpy.ndarray: Virtual slope values
     """
-    if kg is None or rho is None:
+    if config.kg is None or config.rho is None:
         raise ValueError(
             "Rider mass (kg) and air density (rho) are required parameters"
         )
 
     if df is not None:
-        w = df["watts"].values * eta
+        w = df["watts"].values * config.eta
         acc = df["a"].values
         vg = df["v"].values
     else:
-        w = np.array(watts) * eta
+        w = np.array(watts) * config.eta
         acc = np.array(a)
         vg = np.array(v)
 
@@ -445,12 +437,12 @@ def virtual_slope(
         valid_acc = acc[valid_idx]
 
         # Calculate air velocity
-        valid_va = valid_vg + vw
+        valid_va = valid_vg + config.vw
 
         # Calculate slope for valid entries (no division by zero possible)
         valid_slopes = (
-            (valid_w / (valid_vg * kg * 9.807))
-            - (cda * rho * valid_va**2 / (2 * kg * 9.807))
+            (valid_w / (valid_vg * config.kg * 9.807))
+            - (cda * config.rho * valid_va**2 / (2 * config.kg * 9.807))
             - crr
             - valid_acc / 9.807
         )

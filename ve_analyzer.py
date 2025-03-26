@@ -11,6 +11,7 @@ import pandas as pd
 
 # Import from our modules
 from core.calculations import accel_calc, calculate_distance, delta_ve
+from core.config import VirtualElevationConfig
 from core.optimization import (
     calculate_virtual_profile,
     optimize_both_params_balanced,
@@ -31,21 +32,13 @@ from data_io.fit_parser import parse_fit_file
 
 def analyze_and_plot_ve(
     df,
+    config: VirtualElevationConfig,
     actual_elevation_col="elevation",
-    kg=None,
-    rho=None,
-    dt=1,
-    eta=0.98,
-    vw=0,
     distance_col=None,
     save_path=None,
     lap_column=None,
-    fixed_cda=None,
-    fixed_crr=None,
     r2_weight=0.5,
     n_grid=250,
-    cda_bounds=(0.1, 0.5),
-    crr_bounds=(0.001, 0.01),
     target_elevation_gain=None,
     is_combined_laps=False,
     interactive_plot=False,
@@ -79,7 +72,7 @@ def analyze_and_plot_ve(
     Returns:
         tuple: (optimized_cda, optimized_crr, rmse, r2, fig)
     """
-    if kg is None or rho is None:
+    if config.kg is None or config.rho is None:
         raise ValueError(
             "Rider mass (kg) and air density (rho) are required parameters"
         )
@@ -88,7 +81,7 @@ def analyze_and_plot_ve(
 
     # Ensure we have acceleration data
     if "a" not in df.columns:
-        df["a"] = accel_calc(df["v"].values, dt)
+        df["a"] = accel_calc(df["v"].values, config.dt)
 
     # Get actual elevation data
     actual_elevation = df[actual_elevation_col].values
@@ -98,15 +91,20 @@ def analyze_and_plot_ve(
     if distance_col and distance_col in df.columns:
         distance = df[distance_col].values
     else:
-        distance = calculate_distance(df, dt)
+        distance = calculate_distance(df, config.dt)
 
     # Determine which parameters to optimize
-    if fixed_cda is not None and fixed_crr is not None:
+    if config.fixed_cda is not None and config.fixed_crr is not None:
         # Both parameters fixed - no optimization needed
-        print(f"Using fixed parameters: CdA={fixed_cda:.4f} m², Crr={fixed_crr:.5f}")
+        print(
+            f"Using fixed parameters: CdA={config.fixed_cda:.4f} m², Crr={config.fixed_crr:.5f}"
+        )
         # Calculate virtual elevation with fixed parameters
         ve_changes = delta_ve(
-            cda=fixed_cda, crr=fixed_crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
+            config,
+            cda=config.fixed_cda,
+            crr=config.fixed_crr,
+            df=df,
         )
 
         # Build virtual elevation profile
@@ -116,122 +114,99 @@ def analyze_and_plot_ve(
 
         # Calculate RMSE
         rmse = np.sqrt(np.mean((virtual_elevation - actual_elevation) ** 2))
-        optimized_cda = fixed_cda
-        optimized_crr = fixed_crr
+        optimized_cda = config.fixed_cda
+        optimized_crr = config.fixed_crr
 
-    elif fixed_cda is not None:
+    elif config.fixed_cda is not None:
         # Only optimize Crr with fixed CdA
         if target_elevation_gain is not None:
             if is_combined_laps:
                 if target_elevation_gain == 0:
                     print(
-                        f"Using fixed CdA={fixed_cda:.4f} m² and optimizing Crr for zero total elevation gain"
+                        f"Using fixed CdA={config.fixed_cda:.4f} m² and optimizing Crr for zero total elevation gain"
                     )
                 else:
                     print(
-                        f"Using fixed CdA={fixed_cda:.4f} m² and optimizing Crr for {target_elevation_gain:.1f}m total elevation gain"
+                        f"Using fixed CdA={config.fixed_cda:.4f} m² and optimizing Crr for {target_elevation_gain:.1f}m total elevation gain"
                     )
             else:
                 if target_elevation_gain == 0:
                     print(
-                        f"Using fixed CdA={fixed_cda:.4f} m² and optimizing Crr for zero elevation gain per lap"
+                        f"Using fixed CdA={config.fixed_cda:.4f} m² and optimizing Crr for zero elevation gain per lap"
                     )
                 else:
                     print(
-                        f"Using fixed CdA={fixed_cda:.4f} m² and optimizing Crr for {target_elevation_gain:.1f}m elevation gain per lap"
+                        f"Using fixed CdA={config.fixed_cda:.4f} m² and optimizing Crr for {target_elevation_gain:.1f}m elevation gain per lap"
                     )
 
             optimized_cda, optimized_crr, rmse, r2, virtual_elevation = (
                 optimize_crr_only_for_target_elevation(
                     df=df,
                     actual_elevation=actual_elevation,
-                    fixed_cda=fixed_cda,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
-                    vw=vw,
+                    config=config,
                     target_elevation_gain=target_elevation_gain,
                     lap_column=lap_column,
                     n_points=n_grid,
-                    crr_bounds=crr_bounds,
                     is_combined_laps=is_combined_laps,
                 )
             )
         else:
-            print(f"Using fixed CdA={fixed_cda:.4f} m² and optimizing Crr")
+            print(f"Using fixed CdA={config.fixed_cda:.4f} m² and optimizing Crr")
             optimized_cda, optimized_crr, rmse, r2, virtual_elevation = (
                 optimize_crr_only_balanced(
                     df=df,
                     actual_elevation=actual_elevation,
-                    fixed_cda=fixed_cda,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
-                    vw=vw,
+                    config=config,
+                    fixed_cda=config.fixed_cda,
                     lap_column=lap_column,
                     n_points=n_grid,
                     r2_weight=r2_weight,
-                    crr_bounds=crr_bounds,
                 )
             )
 
-    elif fixed_crr is not None:
+    elif config.fixed_crr is not None:
         # Only optimize CdA with fixed Crr
         if target_elevation_gain is not None:
             if is_combined_laps:
                 if target_elevation_gain == 0:
                     print(
-                        f"Using fixed Crr={fixed_crr:.5f} and optimizing CdA for zero total elevation gain"
+                        f"Using fixed Crr={config.fixed_crr:.5f} and optimizing CdA for zero total elevation gain"
                     )
                 else:
                     print(
-                        f"Using fixed Crr={fixed_crr:.5f} and optimizing CdA for {target_elevation_gain:.1f}m total elevation gain"
+                        f"Using fixed Crr={config.fixed_crr:.5f} and optimizing CdA for {target_elevation_gain:.1f}m total elevation gain"
                     )
             else:
                 if target_elevation_gain == 0:
                     print(
-                        f"Using fixed Crr={fixed_crr:.5f} and optimizing CdA for zero elevation gain per lap"
+                        f"Using fixed Crr={config.fixed_crr:.5f} and optimizing CdA for zero elevation gain per lap"
                     )
                 else:
                     print(
-                        f"Using fixed Crr={fixed_crr:.5f} and optimizing CdA for {target_elevation_gain:.1f}m elevation gain per lap"
+                        f"Using fixed Crr={config.fixed_crr:.5f} and optimizing CdA for {target_elevation_gain:.1f}m elevation gain per lap"
                     )
 
             optimized_cda, optimized_crr, rmse, r2, virtual_elevation = (
                 optimize_cda_only_for_target_elevation(
                     df=df,
                     actual_elevation=actual_elevation,
-                    fixed_crr=fixed_crr,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
-                    vw=vw,
+                    config=config,
                     target_elevation_gain=target_elevation_gain,
                     lap_column=lap_column,
                     n_points=n_grid,
-                    cda_bounds=cda_bounds,
                     is_combined_laps=is_combined_laps,
                 )
             )
         else:
-            print(f"Using fixed Crr={fixed_crr:.5f} and optimizing CdA")
+            print(f"Using fixed Crr={config.fixed_crr:.5f} and optimizing CdA")
             optimized_cda, optimized_crr, rmse, r2, virtual_elevation = (
                 optimize_cda_only_balanced(
                     df=df,
                     actual_elevation=actual_elevation,
-                    fixed_crr=fixed_crr,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
-                    vw=vw,
+                    config=config,
                     lap_column=lap_column,
                     n_points=n_grid,
                     r2_weight=r2_weight,
-                    cda_bounds=cda_bounds,
                 )
             )
 
@@ -257,16 +232,10 @@ def analyze_and_plot_ve(
                 optimize_both_params_for_target_elevation(
                     df=df,
                     actual_elevation=actual_elevation,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
-                    vw=vw,
+                    config=config,
                     target_elevation_gain=target_elevation_gain,
                     lap_column=lap_column,
                     n_grid=n_grid,
-                    cda_bounds=cda_bounds,
-                    crr_bounds=crr_bounds,
                     is_combined_laps=is_combined_laps,
                 )
             )
@@ -276,16 +245,10 @@ def analyze_and_plot_ve(
                 optimize_both_params_balanced(
                     df=df,
                     actual_elevation=actual_elevation,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
-                    vw=vw,
+                    config=config,
                     lap_column=lap_column,
                     n_grid=n_grid,
                     r2_weight=r2_weight,
-                    cda_bounds=cda_bounds,
-                    crr_bounds=crr_bounds,
                 )
             )
 
@@ -391,17 +354,11 @@ def analyze_and_plot_ve(
             optimized_cda=optimized_cda,
             optimized_crr=optimized_crr,
             distance=distance,
-            kg=kg,
-            rho=rho,
-            dt=dt,
-            eta=eta,
-            vw=vw,
+            config=config,
             lap_column=lap_column,
             rmse=rmse,
             r2=r2,
             save_path=None,  # Don't save by default
-            cda_range=cda_bounds,
-            crr_range=crr_bounds,
         )
 
         # Update parameters if the user saved new ones
@@ -409,16 +366,7 @@ def analyze_and_plot_ve(
             optimized_cda, optimized_crr = saved_params
 
             # Recalculate virtual elevation with new parameters
-            ve_changes = delta_ve(
-                cda=optimized_cda,
-                crr=optimized_crr,
-                df=df,
-                vw=vw,
-                kg=kg,
-                rho=rho,
-                dt=dt,
-                eta=eta,
-            )
+            ve_changes = delta_ve(config, cda=optimized_cda, crr=optimized_crr, df=df)
             virtual_elevation = calculate_virtual_profile(
                 ve_changes, actual_elevation, lap_column, df
             )
@@ -440,23 +388,16 @@ def analyze_and_plot_ve(
 def analyze_lap_data(
     df,
     lap_messages,
-    rider_mass,
-    air_density,
+    config: VirtualElevationConfig,
     fit_file_path,  # Added parameter to get filename
-    eta=0.98,
-    resample_freq="1s",
     save_dir=None,
     min_lap_duration=30,
     debug=False,
-    fixed_cda=None,
-    fixed_crr=None,
     trim_distance=0,
     trim_start=None,
     trim_end=None,
     r2_weight=0.5,
     n_grid=250,
-    cda_bounds=(0.1, 0.5),
-    crr_bounds=(0.001, 0.01),
     target_elevation_gain=None,
     show_map=False,
     interactive_plot=False,
@@ -464,20 +405,22 @@ def analyze_lap_data(
     """
     Process and analyze data by laps.
     """
-    import os
     import json
-    import pandas as pd
-    import numpy as np
+    import os
+
     import matplotlib.pyplot as plt
-    from core.visualization import create_combined_interactive_plot
+    import numpy as np
+    import pandas as pd
+
     from core.calculations import accel_calc, calculate_distance, delta_ve
     from core.optimization import (
         calculate_virtual_profile,
         optimize_both_params_balanced,
     )
+    from core.visualization import create_combined_interactive_plot
     from data_io.data_processing import resample_data, trim_data_by_distance
 
-    if rider_mass is None or air_density is None:
+    if config.kg is None or config.rho is None:
         raise ValueError("Rider mass and air density are required parameters")
 
     # Create result directory based on filename if not exists
@@ -596,7 +539,7 @@ def analyze_lap_data(
 
         # Resample to constant time interval
         try:
-            resampled_df = resample_data(lap_df, resample_freq)
+            resampled_df = resample_data(lap_df, config.resample_freq)
             if len(resampled_df) < 10:
                 print(
                     f"  Skipping lap {lap_num}: Not enough data points after resampling ({len(resampled_df)})"
@@ -613,6 +556,7 @@ def analyze_lap_data(
         dt_values = resampled_df["timestamp"].diff().dt.total_seconds()
         avg_dt = dt_values[1:].mean()  # skip first row which is NaN
         dt = avg_dt if not np.isnan(avg_dt) else 1.0
+        config.dt = dt
 
         # Calculate acceleration
         resampled_df["a"] = accel_calc(resampled_df["v"].values, dt)
@@ -630,8 +574,8 @@ def analyze_lap_data(
         lap_key = f"lap_{lap_num}"
         initial_trim_start = trim_start if trim_start is not None else trim_distance
         initial_trim_end = trim_end if trim_end is not None else trim_distance
-        initial_cda = fixed_cda if fixed_cda is not None else 0.3
-        initial_crr = fixed_crr if fixed_crr is not None else 0.005
+        initial_cda = config.fixed_cda if config.fixed_cda is not None else 0.3
+        initial_crr = config.fixed_crr if config.fixed_crr is not None else 0.005
 
         if lap_key in saved_params:
             saved_lap_params = saved_params[lap_key]
@@ -647,9 +591,7 @@ def analyze_lap_data(
         def optimization_function(
             df,
             actual_elevation,
-            kg,
-            rho,
-            dt,
+            config: VirtualElevationConfig,
             initial_cda=None,
             initial_crr=None,
             target_elevation_gain=None,
@@ -658,22 +600,15 @@ def analyze_lap_data(
 
             # When using target elevation gain
             if target_elevation_gain is not None:
-                if fixed_cda is not None and fixed_crr is not None:
+                if config.fixed_cda is not None and config.fixed_crr is not None:
                     # Both parameters fixed - no optimization needed
                     print(
-                        f"Using fixed parameters: CdA={fixed_cda:.4f} m², Crr={fixed_crr:.5f}"
+                        f"Using fixed parameters: CdA={config.fixed_cda:.4f} m², Crr={config.fixed_crr:.5f}"
                     )
 
                     # Calculate virtual elevation with fixed parameters
                     ve_changes = delta_ve(
-                        cda=fixed_cda,
-                        crr=fixed_crr,
-                        df=df,
-                        vw=0,
-                        kg=kg,
-                        rho=rho,
-                        dt=dt,
-                        eta=eta,
+                        config, cda=config.fixed_cda, crr=config.fixed_crr, df=df
                     )
 
                     # Build virtual elevation profile
@@ -687,42 +622,40 @@ def analyze_lap_data(
 
                     r2 = pearsonr(virtual_elevation, actual_elevation)[0] ** 2
 
-                    return fixed_cda, fixed_crr, rmse, r2, virtual_elevation
+                    return (
+                        config.fixed_cda,
+                        config.fixed_crr,
+                        rmse,
+                        r2,
+                        virtual_elevation,
+                    )
 
-                elif fixed_cda is not None:
+                elif config.fixed_cda is not None:
                     # Optimize Crr only with fixed CdA for target elevation
                     print(
-                        f"Using fixed CdA={fixed_cda:.4f} m² and optimizing Crr for target elevation gain {target_elevation_gain:.1f}m"
+                        f"Using fixed CdA={config.fixed_cda:.4f} m² and optimizing Crr for target elevation gain {target_elevation_gain:.1f}m"
                     )
                     from core.optimization import optimize_crr_only_for_target_elevation
 
                     return optimize_crr_only_for_target_elevation(
                         df=df,
                         actual_elevation=actual_elevation,
-                        fixed_cda=fixed_cda,
-                        kg=kg,
-                        rho=rho,
-                        dt=dt,
-                        eta=eta,
+                        config=config,
                         target_elevation_gain=target_elevation_gain,
                         is_combined_laps=False if lap_num > 0 else True,
                     )
 
-                elif fixed_crr is not None:
+                elif config.fixed_crr is not None:
                     # Optimize CdA only with fixed Crr for target elevation
                     print(
-                        f"Using fixed Crr={fixed_crr:.5f} and optimizing CdA for target elevation gain {target_elevation_gain:.1f}m"
+                        f"Using fixed Crr={config.fixed_crr:.5f} and optimizing CdA for target elevation gain {target_elevation_gain:.1f}m"
                     )
                     from core.optimization import optimize_cda_only_for_target_elevation
 
                     return optimize_cda_only_for_target_elevation(
                         df=df,
                         actual_elevation=actual_elevation,
-                        fixed_crr=fixed_crr,
-                        kg=kg,
-                        rho=rho,
-                        dt=dt,
-                        eta=eta,
+                        config=config,
                         target_elevation_gain=target_elevation_gain,
                         is_combined_laps=False if lap_num > 0 else True,
                     )
@@ -739,30 +672,20 @@ def analyze_lap_data(
                     return optimize_both_params_for_target_elevation(
                         df=df,
                         actual_elevation=actual_elevation,
-                        kg=kg,
-                        rho=rho,
-                        dt=dt,
-                        eta=eta,
+                        config=config,
                         target_elevation_gain=target_elevation_gain,
                         is_combined_laps=False if lap_num > 0 else True,
                     )
             else:
                 # Standard R²/RMSE optimization
-                if fixed_cda is not None and fixed_crr is not None:
+                if config.fixed_cda is not None and config.fixed_crr is not None:
                     # Both parameters fixed - no optimization needed
                     print(
-                        f"Using fixed parameters: CdA={fixed_cda:.4f} m², Crr={fixed_crr:.5f}"
+                        f"Using fixed parameters: CdA={config.fixed_cda:.4f} m², Crr={config.fixed_crr:.5f}"
                     )
                     # Calculate virtual elevation with fixed parameters
                     ve_changes = delta_ve(
-                        cda=fixed_cda,
-                        crr=fixed_crr,
-                        df=df,
-                        vw=0,
-                        kg=kg,
-                        rho=rho,
-                        dt=dt,
-                        eta=eta,
+                        config, cda=config.fixed_cda, crr=config.fixed_crr, df=df
                     )
                     # Build virtual elevation profile
                     virtual_elevation = calculate_virtual_profile(
@@ -773,40 +696,38 @@ def analyze_lap_data(
                     from scipy.stats import pearsonr
 
                     r2 = pearsonr(virtual_elevation, actual_elevation)[0] ** 2
-                    return fixed_cda, fixed_crr, rmse, r2, virtual_elevation
+                    return (
+                        config.fixed_cda,
+                        config.fixed_crr,
+                        rmse,
+                        r2,
+                        virtual_elevation,
+                    )
 
-                elif fixed_cda is not None:
+                elif config.fixed_cda is not None:
                     # Only optimize Crr with fixed CdA
-                    print(f"Using fixed CdA={fixed_cda:.4f} m² and optimizing Crr")
+                    print(
+                        f"Using fixed CdA={config.fixed_cda:.4f} m² and optimizing Crr"
+                    )
                     from core.optimization import optimize_crr_only_balanced
 
                     return optimize_crr_only_balanced(
                         df=df,
                         actual_elevation=actual_elevation,
-                        fixed_cda=fixed_cda,
-                        kg=kg,
-                        rho=rho,
-                        dt=dt,
-                        eta=eta,
+                        config=config,
                         r2_weight=r2_weight,
-                        crr_bounds=crr_bounds,
                     )
 
-                elif fixed_crr is not None:
+                elif config.fixed_crr is not None:
                     # Only optimize CdA with fixed Crr
-                    print(f"Using fixed Crr={fixed_crr:.5f} and optimizing CdA")
+                    print(f"Using fixed Crr={config.fixed_crr:.5f} and optimizing CdA")
                     from core.optimization import optimize_cda_only_balanced
 
                     return optimize_cda_only_balanced(
                         df=df,
                         actual_elevation=actual_elevation,
-                        fixed_crr=fixed_crr,
-                        kg=kg,
-                        rho=rho,
-                        dt=dt,
-                        eta=eta,
+                        config=config,
                         r2_weight=r2_weight,
-                        cda_bounds=cda_bounds,
                     )
 
                 else:
@@ -817,14 +738,9 @@ def analyze_lap_data(
                     return optimize_both_params_balanced(
                         df=df,
                         actual_elevation=actual_elevation,
-                        kg=kg,
-                        rho=rho,
-                        dt=dt,
-                        eta=eta,
+                        config=config,
                         r2_weight=r2_weight,
                         n_grid=n_grid,
-                        cda_bounds=cda_bounds,
-                        crr_bounds=crr_bounds,
                     )
 
         # ---------------------------------------------------------------------------
@@ -850,24 +766,17 @@ def analyze_lap_data(
                 df=resampled_df,
                 actual_elevation=resampled_df["elevation"].values,
                 lap_num=lap_num,
-                rider_mass=rider_mass,
-                air_density=air_density,
+                config=config,
                 initial_cda=initial_cda,
                 initial_crr=initial_crr,
                 initial_trim_start=initial_trim_start,
                 initial_trim_end=initial_trim_end,
-                dt=dt,
-                eta=eta,
-                cda_range=cda_bounds,
-                crr_range=crr_bounds,
                 save_path=map_save_path,
                 # Pass target_elevation_gain in the lambda function
-                optimization_function=lambda df, actual_elevation, kg, rho, dt, initial_cda=None, initial_crr=None, target_elevation_gain=None: optimization_function(
+                optimization_function=lambda df, actual_elevation, config, initial_cda=None, initial_crr=None, target_elevation_gain=None: optimization_function(
                     df,
                     actual_elevation,
-                    kg,
-                    rho,
-                    dt,
+                    config,
                     initial_cda,
                     initial_crr,
                     target_elevation_gain,
@@ -928,16 +837,7 @@ def analyze_lap_data(
             cda, crr, rmse, r2 = final_cda, final_crr, final_rmse, final_r2
 
             # Calculate virtual elevation profile for saving
-            ve_changes = delta_ve(
-                cda=cda,
-                crr=crr,
-                df=trimmed_df,
-                vw=0,
-                kg=rider_mass,
-                rho=air_density,
-                dt=dt,
-                eta=eta,
-            )
+            ve_changes = delta_ve(config, cda=cda, crr=crr, df=trimmed_df)
             virtual_profile = calculate_virtual_profile(
                 ve_changes, trimmed_df["elevation"].values, None, trimmed_df
             )
@@ -988,18 +888,11 @@ def analyze_lap_data(
                 print("  Running parameter optimization...")
                 cda, crr, rmse, r2, fig = analyze_and_plot_ve(
                     df=resampled_df,
+                    config=config,
                     actual_elevation_col="elevation",
-                    kg=rider_mass,
-                    rho=air_density,
-                    dt=dt,
-                    eta=eta,
                     save_path=save_path,
-                    fixed_cda=fixed_cda,
-                    fixed_crr=fixed_crr,
                     r2_weight=r2_weight,
                     n_grid=n_grid,
-                    cda_bounds=cda_bounds,
-                    crr_bounds=crr_bounds,
                     target_elevation_gain=target_elevation_gain,
                     interactive_plot=False,
                 )
@@ -1056,7 +949,7 @@ def analyze_lap_data(
         if (
             show_map and not interactive_plot
         ):  # Don't need separate maps in interactive mode
-            from core.visualization import plot_static_map, create_interactive_map
+            from core.visualization import create_interactive_map, plot_static_map
 
             # Get the original lap data with GPS coordinates
             original_lap_df = df[
@@ -1095,23 +988,16 @@ def analyze_combined_laps(
     df,
     lap_messages,
     selected_laps,
-    rider_mass,
-    air_density,
     fit_file_path,  # Added parameter to get filename
-    eta=0.98,
-    resample_freq="1s",
+    config: VirtualElevationConfig,
     save_dir=None,
     min_lap_duration=30,
     debug=False,
-    fixed_cda=None,
-    fixed_crr=None,
     trim_distance=0,
     trim_start=None,
     trim_end=None,
     r2_weight=0.5,
     n_grid=250,
-    cda_bounds=(0.1, 0.5),
-    crr_bounds=(0.001, 0.01),
     target_elevation_gain=None,
     show_map=False,
     interactive_plot=False,
@@ -1121,18 +1007,20 @@ def analyze_combined_laps(
     If target_elevation_gain is provided, it's interpreted as the target total elevation gain
     across all combined laps.
     """
-    import os
     import json
-    import pandas as pd
-    import numpy as np
+    import os
+
     import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
     from scipy.stats import pearsonr
-    from core.visualization import create_combined_interactive_plot
+
     from core.calculations import accel_calc, calculate_distance, delta_ve
     from core.optimization import calculate_virtual_profile
+    from core.visualization import create_combined_interactive_plot
     from data_io.data_processing import resample_data, trim_data_by_distance
 
-    if rider_mass is None or air_density is None:
+    if config.kg is None or config.rho is None:
         raise ValueError("Rider mass and air density are required parameters")
 
     # Create result directory based on filename if not exists
@@ -1223,7 +1111,7 @@ def analyze_combined_laps(
 
         # Resample each lap individually
         try:
-            resampled_lap_df = resample_data(lap_df, resample_freq)
+            resampled_lap_df = resample_data(lap_df, config.resample_freq)
 
             # Add a lap identifier column
             resampled_lap_df["lap_number"] = lap["lap_number"]
@@ -1266,6 +1154,9 @@ def analyze_combined_laps(
     dt = avg_dt if not np.isnan(avg_dt) else 1.0
     print(f"Using time interval dt={dt:.2f}s for acceleration calculations")
 
+    # set dt in config for use in optimization
+    config.dt = dt
+
     # Calculate acceleration (only within each lap, not across lap boundaries)
     a_values = np.zeros(len(combined_df))
 
@@ -1275,20 +1166,20 @@ def analyze_combined_laps(
 
         if len(lap_indices) > 1:
             lap_v = combined_df.loc[lap_mask, "v"].values
-            lap_a = accel_calc(lap_v, dt)
+            lap_a = accel_calc(lap_v, config.dt)
             a_values[lap_indices] = lap_a
 
     combined_df["a"] = a_values
 
     # Calculate distance before any trimming
-    distance = calculate_distance(combined_df, dt)
+    distance = calculate_distance(combined_df, config.dt)
 
     # Get saved parameters for combined laps if available
     combined_key = f"combined_laps_{'-'.join(map(str, selected_laps))}"
     initial_trim_start = trim_start if trim_start is not None else trim_distance
     initial_trim_end = trim_end if trim_end is not None else trim_distance
-    initial_cda = fixed_cda if fixed_cda is not None else 0.3
-    initial_crr = fixed_crr if fixed_crr is not None else 0.005
+    initial_cda = config.fixed_cda if config.fixed_cda is not None else 0.3
+    initial_crr = config.fixed_crr if config.fixed_crr is not None else 0.005
 
     if combined_key in saved_params:
         saved_combined_params = saved_params[combined_key]
@@ -1311,9 +1202,7 @@ def analyze_combined_laps(
     def optimization_function(
         df,
         actual_elevation,
-        kg,
-        rho,
-        dt,
+        config: VirtualElevationConfig,
         initial_cda=None,
         initial_crr=None,
         target_elevation_gain=None,
@@ -1322,22 +1211,16 @@ def analyze_combined_laps(
 
         # When using target elevation gain
         if target_elevation_gain is not None:
-            if fixed_cda is not None and fixed_crr is not None:
+            if config.fixed_cda is not None and config.fixed_crr is not None:
                 # Both parameters fixed - no optimization needed
                 print(
-                    f"Using fixed parameters: CdA={fixed_cda:.4f} m², Crr={fixed_crr:.5f}"
+                    f"Using fixed parameters: CdA={config.fixed_cda:.4f} m², Crr={config.fixed_crr:.5f}"
                 )
 
                 # Calculate virtual elevation with fixed parameters
                 ve_changes = delta_ve(
-                    cda=fixed_cda,
-                    crr=fixed_crr,
+                    config,
                     df=df,
-                    vw=0,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
                 )
 
                 # Build virtual elevation profile
@@ -1351,42 +1234,34 @@ def analyze_combined_laps(
 
                 r2 = pearsonr(virtual_elevation, actual_elevation)[0] ** 2
 
-                return fixed_cda, fixed_crr, rmse, r2, virtual_elevation
+                return config.fixed_cda, config.fixed_crr, rmse, r2, virtual_elevation
 
-            elif fixed_cda is not None:
+            elif config.fixed_cda is not None:
                 # Optimize Crr only with fixed CdA for target elevation
                 print(
-                    f"Using fixed CdA={fixed_cda:.4f} m² and optimizing Crr for target elevation gain {target_elevation_gain:.1f}m"
+                    f"Using fixed CdA={config.fixed_cda:.4f} m² and optimizing Crr for target elevation gain {target_elevation_gain:.1f}m"
                 )
                 from core.optimization import optimize_crr_only_for_target_elevation
 
                 return optimize_crr_only_for_target_elevation(
                     df=df,
                     actual_elevation=actual_elevation,
-                    fixed_cda=fixed_cda,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
+                    config=config,
                     target_elevation_gain=target_elevation_gain,
                     is_combined_laps=True,  # Always true for combined laps
                 )
 
-            elif fixed_crr is not None:
+            elif config.fixed_crr is not None:
                 # Optimize CdA only with fixed Crr for target elevation
                 print(
-                    f"Using fixed Crr={fixed_crr:.5f} and optimizing CdA for target elevation gain {target_elevation_gain:.1f}m"
+                    f"Using fixed Crr={config.fixed_crr:.5f} and optimizing CdA for target elevation gain {target_elevation_gain:.1f}m"
                 )
                 from core.optimization import optimize_cda_only_for_target_elevation
 
                 return optimize_cda_only_for_target_elevation(
                     df=df,
                     actual_elevation=actual_elevation,
-                    fixed_crr=fixed_crr,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
+                    config=config,
                     target_elevation_gain=target_elevation_gain,
                     is_combined_laps=True,  # Always true for combined laps
                 )
@@ -1401,30 +1276,20 @@ def analyze_combined_laps(
                 return optimize_both_params_for_target_elevation(
                     df=df,
                     actual_elevation=actual_elevation,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
+                    config=config,
                     target_elevation_gain=target_elevation_gain,
                     is_combined_laps=True,  # Always true for combined laps
                 )
         else:
             # Standard R²/RMSE optimization
-            if fixed_cda is not None and fixed_crr is not None:
+            if config.fixed_cda is not None and config.fixed_crr is not None:
                 # Both parameters fixed - no optimization needed
                 print(
-                    f"Using fixed parameters: CdA={fixed_cda:.4f} m², Crr={fixed_crr:.5f}"
+                    f"Using fixed parameters: CdA={config.fixed_cda:.4f} m², Crr={config.fixed_crr:.5f}"
                 )
                 # Calculate virtual elevation with fixed parameters
                 ve_changes = delta_ve(
-                    cda=fixed_cda,
-                    crr=fixed_crr,
-                    df=df,
-                    vw=0,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
+                    config, cda=config.fixed_cda, crr=config.fixed_crr, df=df
                 )
                 # Build virtual elevation profile
                 virtual_elevation = calculate_virtual_profile(
@@ -1435,40 +1300,30 @@ def analyze_combined_laps(
                 from scipy.stats import pearsonr
 
                 r2 = pearsonr(virtual_elevation, actual_elevation)[0] ** 2
-                return fixed_cda, fixed_crr, rmse, r2, virtual_elevation
+                return config.fixed_cda, config.fixed_crr, rmse, r2, virtual_elevation
 
-            elif fixed_cda is not None:
+            elif config.fixed_cda is not None:
                 # Only optimize Crr with fixed CdA
-                print(f"Using fixed CdA={fixed_cda:.4f} m² and optimizing Crr")
+                print(f"Using fixed CdA={config.fixed_cda:.4f} m² and optimizing Crr")
                 from core.optimization import optimize_crr_only_balanced
 
                 return optimize_crr_only_balanced(
                     df=df,
                     actual_elevation=actual_elevation,
-                    fixed_cda=fixed_cda,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
+                    config=config,
                     r2_weight=r2_weight,
-                    crr_bounds=crr_bounds,
                 )
 
-            elif fixed_crr is not None:
+            elif config.fixed_crr is not None:
                 # Only optimize CdA with fixed Crr
-                print(f"Using fixed Crr={fixed_crr:.5f} and optimizing CdA")
+                print(f"Using fixed Crr={config.fixed_crr:.5f} and optimizing CdA")
                 from core.optimization import optimize_cda_only_balanced
 
                 return optimize_cda_only_balanced(
                     df=df,
                     actual_elevation=actual_elevation,
-                    fixed_crr=fixed_crr,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
+                    config=config,
                     r2_weight=r2_weight,
-                    cda_bounds=cda_bounds,
                 )
 
             else:
@@ -1479,14 +1334,9 @@ def analyze_combined_laps(
                 return optimize_both_params_balanced(
                     df=df,
                     actual_elevation=actual_elevation,
-                    kg=kg,
-                    rho=rho,
-                    dt=dt,
-                    eta=eta,
+                    config=config,
                     r2_weight=r2_weight,
                     n_grid=n_grid,
-                    cda_bounds=cda_bounds,
-                    crr_bounds=crr_bounds,
                 )
 
     # INTERACTIVE MODE WITH COMBINED PLOT
@@ -1511,23 +1361,16 @@ def analyze_combined_laps(
             df=combined_df,
             actual_elevation=combined_df["elevation"].values,
             lap_num=0,  # 0 indicates combined laps
-            rider_mass=rider_mass,
-            air_density=air_density,
+            config=config,
             initial_cda=initial_cda,
             initial_crr=initial_crr,
             initial_trim_start=initial_trim_start,
             initial_trim_end=initial_trim_end,
-            dt=dt,
-            eta=eta,
-            cda_range=cda_bounds,
-            crr_range=crr_bounds,
             save_path=map_save_path,
-            optimization_function=lambda df, actual_elevation, kg, rho, dt, initial_cda=None, initial_crr=None, target_elevation_gain=None: optimization_function(
+            optimization_function=lambda df, actual_elevation, config, initial_cda=None, initial_crr=None, target_elevation_gain=None: optimization_function(
                 df,
                 actual_elevation,
-                kg,
-                rho,
-                dt,
+                config,
                 initial_cda,
                 initial_crr,
                 target_elevation_gain,
@@ -1586,16 +1429,7 @@ def analyze_combined_laps(
         cda, crr, rmse, r2 = final_cda, final_crr, final_rmse, final_r2
 
         # Calculate virtual elevation profile for saving
-        ve_changes = delta_ve(
-            cda=cda,
-            crr=crr,
-            df=trimmed_df,
-            vw=0,
-            kg=rider_mass,
-            rho=air_density,
-            dt=dt,
-            eta=eta,
-        )
+        ve_changes = delta_ve(config, cda=cda, crr=crr, df=trimmed_df)
         virtual_profile = calculate_virtual_profile(
             ve_changes, trimmed_df["elevation"].values, "lap_number", trimmed_df
         )
@@ -1677,44 +1511,30 @@ def analyze_combined_laps(
                 )
 
             # Perform the analysis with is_combined_laps=True when target_elevation_gain is specified
-            if target_elevation_gain is not None and fixed_cda is not None:
+            if target_elevation_gain is not None and config.fixed_cda is not None:
                 # Optimize Crr only with fixed CdA
                 cda, crr, rmse, r2, fig = analyze_and_plot_ve(
                     df=combined_df,
+                    config=config,
                     actual_elevation_col="elevation",
-                    kg=rider_mass,
-                    rho=air_density,
-                    dt=dt,
-                    eta=eta,
                     save_path=save_path,
                     lap_column="lap_number",
-                    fixed_cda=fixed_cda,
-                    fixed_crr=fixed_crr,
                     r2_weight=r2_weight,
                     n_grid=n_grid,
-                    cda_bounds=cda_bounds,
-                    crr_bounds=crr_bounds,
                     target_elevation_gain=target_elevation_gain,
                     is_combined_laps=True,  # Indicate this is for combined laps
                     interactive_plot=False,
                 )
-            elif target_elevation_gain is not None and fixed_crr is not None:
+            elif target_elevation_gain is not None and config.fixed_crr is not None:
                 # Optimize CdA only with fixed Crr
                 cda, crr, rmse, r2, fig = analyze_and_plot_ve(
                     df=combined_df,
+                    config=config,
                     actual_elevation_col="elevation",
-                    kg=rider_mass,
-                    rho=air_density,
-                    dt=dt,
-                    eta=eta,
                     save_path=save_path,
                     lap_column="lap_number",
-                    fixed_cda=fixed_cda,
-                    fixed_crr=fixed_crr,
                     r2_weight=r2_weight,
                     n_grid=n_grid,
-                    cda_bounds=cda_bounds,
-                    crr_bounds=crr_bounds,
                     target_elevation_gain=target_elevation_gain,
                     is_combined_laps=True,  # Indicate this is for combined laps
                     interactive_plot=False,
@@ -1723,19 +1543,12 @@ def analyze_combined_laps(
                 # Optimize both parameters
                 cda, crr, rmse, r2, fig = analyze_and_plot_ve(
                     df=combined_df,
+                    config=config,
                     actual_elevation_col="elevation",
-                    kg=rider_mass,
-                    rho=air_density,
-                    dt=dt,
-                    eta=eta,
                     save_path=save_path,
                     lap_column="lap_number",
-                    fixed_cda=fixed_cda,
-                    fixed_crr=fixed_crr,
                     r2_weight=r2_weight,
                     n_grid=n_grid,
-                    cda_bounds=cda_bounds,
-                    crr_bounds=crr_bounds,
                     target_elevation_gain=target_elevation_gain,
                     is_combined_laps=True,  # Indicate this is for combined laps
                     interactive_plot=False,
@@ -1744,19 +1557,12 @@ def analyze_combined_laps(
                 # Standard r2/RMSE optimization
                 cda, crr, rmse, r2, fig = analyze_and_plot_ve(
                     df=combined_df,
+                    config=config,
                     actual_elevation_col="elevation",
-                    kg=rider_mass,
-                    rho=air_density,
-                    dt=dt,
-                    eta=eta,
                     save_path=save_path,
                     lap_column="lap_number",
-                    fixed_cda=fixed_cda,
-                    fixed_crr=fixed_crr,
                     r2_weight=r2_weight,
                     n_grid=n_grid,
-                    cda_bounds=cda_bounds,
-                    crr_bounds=crr_bounds,
                     target_elevation_gain=None,
                     interactive_plot=False,
                 )
@@ -1815,7 +1621,7 @@ def analyze_combined_laps(
 
             # Generate maps if requested
             if show_map:
-                from core.visualization import plot_static_map, create_interactive_map
+                from core.visualization import create_interactive_map, plot_static_map
 
                 # Get the original lap data with GPS coordinates for each selected lap
                 original_combined_df = pd.DataFrame()
@@ -1946,17 +1752,11 @@ def show_interactive_plot(
     optimized_cda,
     optimized_crr,
     distance=None,
-    kg=None,
-    rho=None,
-    dt=1,
-    eta=0.98,
-    vw=0,
+    config: VirtualElevationConfig = None,
     lap_column=None,
     rmse=None,
     r2=None,
     save_path=None,
-    cda_range=None,
-    crr_range=None,
     lap_num=None,  # Added parameter for lap number
 ):
     """
@@ -1986,7 +1786,7 @@ def show_interactive_plot(
     """
     from core.visualization import create_interactive_elevation_plot
 
-    if kg is None or rho is None:
+    if config.kg is None or config.rho is None:
         raise ValueError(
             "Rider mass (kg) and air density (rho) are required parameters"
         )
@@ -2022,11 +1822,7 @@ def show_interactive_plot(
             initial_cda=optimized_cda,
             initial_crr=optimized_crr,
             distance=distance,
-            kg=kg,
-            rho=rho,
-            dt=dt,
-            eta=eta,
-            vw=vw,
+            config=config,
             lap_column=lap_column,
             cda_range=cda_range,
             crr_range=crr_range,
@@ -2165,6 +1961,16 @@ def main():
 
     args = parser.parse_args()
 
+    # Create configuration
+    config = VirtualElevationConfig(
+        rider_mass=args.mass,
+        air_density=args.rho,
+        drivetrain_efficiency=args.eta,
+        fixed_cda=args.cda,
+        fixed_crr=args.crr,
+        resample_freq=args.resample,
+    )
+
     # After parsing args, add some helpful messaging
     if args.optimize_elevation_gain is not None:
         if args.selected_laps:
@@ -2188,6 +1994,7 @@ def main():
     try:
         cda_min, cda_max = map(float, args.cda_bounds.split(","))
         cda_bounds = (cda_min, cda_max)
+        config.cda_bounds = cda_bounds
     except ValueError:
         print(
             f"Error: Invalid CdA bounds format: {args.cda_bounds}. Use format 'min,max'"
@@ -2197,6 +2004,7 @@ def main():
     try:
         crr_min, crr_max = map(float, args.crr_bounds.split(","))
         crr_bounds = (crr_min, crr_max)
+        config.crr_bounds = crr_bounds
     except ValueError:
         print(
             f"Error: Invalid Crr bounds format: {args.crr_bounds}. Use format 'min,max'"
@@ -2258,23 +2066,16 @@ def main():
                 df=df,
                 lap_messages=lap_messages,
                 selected_laps=selected_laps,
-                rider_mass=args.mass,
-                air_density=args.rho,
                 fit_file_path=args.fit_file,  # Added parameter
-                eta=args.eta,
-                resample_freq=args.resample,
+                config=config,
                 save_dir=args.output,
                 min_lap_duration=args.min_lap,
                 debug=args.debug,
-                fixed_cda=args.cda,
-                fixed_crr=args.crr,
                 trim_distance=args.trim_distance,
                 trim_start=args.trim_start,
                 trim_end=args.trim_end,
                 r2_weight=args.r2_weight,
                 n_grid=args.grid_points,
-                cda_bounds=cda_bounds,
-                crr_bounds=crr_bounds,
                 target_elevation_gain=args.optimize_elevation_gain,
                 show_map=args.show_map,
                 interactive_plot=args.interactive,
@@ -2314,23 +2115,16 @@ def main():
     results = analyze_lap_data(
         df=df,
         lap_messages=lap_messages,
-        rider_mass=args.mass,
-        air_density=args.rho,
+        config=config,
         fit_file_path=args.fit_file,  # Added parameter
-        eta=args.eta,
-        resample_freq=args.resample,
         save_dir=args.output,
         min_lap_duration=args.min_lap,
         debug=args.debug,
-        fixed_cda=args.cda,
-        fixed_crr=args.crr,
         trim_distance=args.trim_distance,
         trim_start=args.trim_start,
         trim_end=args.trim_end,
         r2_weight=args.r2_weight,
         n_grid=args.grid_points,
-        cda_bounds=cda_bounds,
-        crr_bounds=crr_bounds,
         target_elevation_gain=args.optimize_elevation_gain,
         show_map=args.show_map,
         interactive_plot=args.interactive,

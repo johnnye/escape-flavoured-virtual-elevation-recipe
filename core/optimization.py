@@ -5,6 +5,7 @@ from scipy.optimize import basinhopping, differential_evolution, minimize_scalar
 from scipy.stats import pearsonr
 
 from core.calculations import delta_ve
+from core.config import VirtualElevationConfig
 
 
 def calculate_virtual_profile(ve_changes, actual_elevation, lap_column, df):
@@ -91,17 +92,11 @@ def should_reset_elevation(current_lap, next_lap):
 def optimize_both_params_balanced(
     df,
     actual_elevation,
-    kg,
-    rho,
+    config: VirtualElevationConfig,
     n_grid=100,  # Reduced grid size to compensate for multiple starts
     r2_weight=0.5,  # Weight for R² in the composite objective (0-1)
-    dt=1,
-    eta=0.98,
-    vw=0,
     lap_column=None,
     rmse_scale=None,  # Auto-calculated scaling factor for RMSE
-    cda_bounds=(0.1, 0.5),  # CdA typically between 0.1 and 0.5 m²
-    crr_bounds=(0.001, 0.01),  # Crr typically between 0.001 and 0.01
     n_random_starts=5,  # Number of random starting points
     basin_hopping_steps=30,  # Number of basin hopping steps
     basin_hopping_temp=1.0,  # Temperature parameter for basin hopping
@@ -140,23 +135,18 @@ def optimize_both_params_balanced(
     actual_elevation = np.array(actual_elevation)
 
     # Define parameter bounds
-    bounds = [cda_bounds, crr_bounds]
+    bounds = [config.cda_bounds, config.crr_bounds]
 
     # Calculate baseline values and scaling factor for RMSE
     if rmse_scale is None:
-        initial_cda = (cda_bounds[0] + cda_bounds[1]) / 2  # Midpoint of cda range
-        initial_crr = (crr_bounds[0] + crr_bounds[1]) / 2  # Midpoint of crr range
+        initial_cda = (
+            config.cda_bounds[0] + config.cda_bounds[1]
+        ) / 2  # Midpoint of cda range
+        initial_crr = (
+            config.crr_bounds[0] + config.crr_bounds[1]
+        ) / 2  # Midpoint of crr range
 
-        initial_ve_changes = delta_ve(
-            cda=initial_cda,
-            crr=initial_crr,
-            df=df,
-            vw=vw,
-            kg=kg,
-            rho=rho,
-            dt=dt,
-            eta=eta,
-        )
+        initial_ve_changes = delta_ve(config, cda=initial_cda, crr=initial_crr, df=df)
         initial_virtual_profile = calculate_virtual_profile(
             initial_ve_changes, actual_elevation, lap_column, df
         )
@@ -177,9 +167,7 @@ def optimize_both_params_balanced(
         cda, crr = params
 
         # Calculate virtual elevation changes
-        ve_changes = delta_ve(
-            cda=cda, crr=crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=cda, crr=crr, df=df)
 
         # Build virtual elevation profile
         virtual_profile = calculate_virtual_profile(
@@ -201,9 +189,7 @@ def optimize_both_params_balanced(
 
     # For calculating metrics from a parameter set
     def calculate_metrics(cda, crr):
-        ve_changes = delta_ve(
-            cda=cda, crr=crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=cda, crr=crr, df=df)
         virtual_profile = calculate_virtual_profile(
             ve_changes, actual_elevation, lap_column, df
         )
@@ -215,8 +201,12 @@ def optimize_both_params_balanced(
         print("Step 1: Grid search to identify promising regions...")
 
     # Create a grid of points to evaluate
-    cda_grid = np.linspace(cda_bounds[0], cda_bounds[1], int(np.sqrt(n_grid)))
-    crr_grid = np.linspace(crr_bounds[0], crr_bounds[1], int(np.sqrt(n_grid)))
+    cda_grid = np.linspace(
+        config.cda_bounds[0], config.cda_bounds[1], int(np.sqrt(n_grid))
+    )
+    crr_grid = np.linspace(
+        config.crr_bounds[0], config.crr_bounds[1], int(np.sqrt(n_grid))
+    )
 
     # Evaluate objective function at each grid point
     grid_results = []
@@ -250,15 +240,15 @@ def optimize_both_params_balanced(
         # Use a smaller step size as we get closer to convergence
         step_size = np.array(
             [
-                (cda_bounds[1] - cda_bounds[0]) * 0.1,
-                (crr_bounds[1] - crr_bounds[0]) * 0.1,
+                (config.cda_bounds[1] - config.cda_bounds[0]) * 0.1,
+                (config.crr_bounds[1] - config.crr_bounds[0]) * 0.1,
             ]
         )
         # Random step within bounds
         new_x = x + np.random.uniform(-1, 1, size=x.shape) * step_size
         # Clip to bounds
-        new_x[0] = np.clip(new_x[0], cda_bounds[0], cda_bounds[1])
-        new_x[1] = np.clip(new_x[1], crr_bounds[0], crr_bounds[1])
+        new_x[0] = np.clip(new_x[0], config.cda_bounds[0], config.cda_bounds[1])
+        new_x[1] = np.clip(new_x[1], config.crr_bounds[0], config.crr_bounds[1])
         return new_x
 
     # Define acceptance test function for basin hopping
@@ -287,8 +277,8 @@ def optimize_both_params_balanced(
 
     # Add random starting points
     for _ in range(n_random_starts - len(starting_points)):
-        random_cda = np.random.uniform(cda_bounds[0], cda_bounds[1])
-        random_crr = np.random.uniform(crr_bounds[0], crr_bounds[1])
+        random_cda = np.random.uniform(config.cda_bounds[0], config.cda_bounds[1])
+        random_crr = np.random.uniform(config.crr_bounds[0], config.crr_bounds[1])
         starting_points.append((random_cda, random_crr))
 
     # Run optimization from each starting point
@@ -382,17 +372,11 @@ def optimize_both_params_balanced(
 def optimize_cda_only_balanced(
     df,
     actual_elevation,
-    fixed_crr,
-    kg,
-    rho,
+    config: VirtualElevationConfig,
     n_points=100,  # Reduced for efficiency with multiple starts
     r2_weight=0.5,  # Weight for R² in the composite objective (0-1)
-    dt=1,
-    eta=0.98,
-    vw=0,
     lap_column=None,
     rmse_scale=None,  # Auto-calculated scaling factor for RMSE
-    cda_bounds=(0.1, 0.5),  # CdA typically between 0.1 and 0.5 m²
     n_random_starts=5,  # Number of random starting points
     basin_hopping_steps=30,  # Number of basin hopping steps
     basin_hopping_temp=1.0,  # Temperature parameter for basin hopping
@@ -432,10 +416,12 @@ def optimize_cda_only_balanced(
 
     # Calculate baseline values and scaling factor for RMSE
     if rmse_scale is None:
-        initial_cda = (cda_bounds[0] + cda_bounds[1]) / 2  # Midpoint of cda range
+        initial_cda = (
+            config.cda_bounds[0] + config.cda_bounds[1]
+        ) / 2  # Midpoint of cda range
 
         initial_ve_changes = delta_ve(
-            cda=initial_cda, crr=fixed_crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
+            config, cda=initial_cda, crr=config.fixed_crr, df=df
         )
         initial_virtual_profile = calculate_virtual_profile(
             initial_ve_changes, actual_elevation, lap_column, df
@@ -460,9 +446,7 @@ def optimize_cda_only_balanced(
             cda = float(cda[0])
 
         # Calculate virtual elevation changes
-        ve_changes = delta_ve(
-            cda=cda, crr=fixed_crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=cda, crr=config.fixed_crr, df=df)
 
         # Build virtual elevation profile
         virtual_profile = calculate_virtual_profile(
@@ -483,9 +467,7 @@ def optimize_cda_only_balanced(
 
     # For calculating metrics from a parameter
     def calculate_metrics(cda):
-        ve_changes = delta_ve(
-            cda=cda, crr=fixed_crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=cda, crr=config.fixed_crr, df=df)
         virtual_profile = calculate_virtual_profile(
             ve_changes, actual_elevation, lap_column, df
         )
@@ -497,7 +479,7 @@ def optimize_cda_only_balanced(
         print("Step 1: Initial search across CdA range...")
 
     # Create a linearly spaced array of CdA values to test
-    cda_values = np.linspace(cda_bounds[0], cda_bounds[1], n_points)
+    cda_values = np.linspace(config.cda_bounds[0], config.cda_bounds[1], n_points)
 
     # Evaluate the objective function for each CdA value
     initial_results = []
@@ -528,11 +510,11 @@ def optimize_cda_only_balanced(
     # Define the step-taking function for basin hopping to respect bounds
     def take_step(x):
         # Scale based on the bounds range
-        step_size = (cda_bounds[1] - cda_bounds[0]) * 0.1
+        step_size = (config.cda_bounds[1] - config.cda_bounds[0]) * 0.1
         # Random step within bounds - ensure we keep the same dimension as x
         new_x = x + np.random.uniform(-1, 1, size=x.shape) * step_size
         # Clip to bounds and ensure dimension is preserved
-        return np.clip(new_x, cda_bounds[0], cda_bounds[1])
+        return np.clip(new_x, config.cda_bounds[0], config.cda_bounds[1])
 
     # Define acceptance test function for basin hopping
     def accept_test(f_new, x_new, f_old, x_old):
@@ -557,7 +539,7 @@ def optimize_cda_only_balanced(
 
     # Add random starting points
     for _ in range(n_random_starts - len(starting_points)):
-        random_cda = np.random.uniform(cda_bounds[0], cda_bounds[1])
+        random_cda = np.random.uniform(config.cda_bounds[0], config.cda_bounds[1])
         starting_points.append(random_cda)
 
     # Run optimization from each starting point
@@ -571,13 +553,18 @@ def optimize_cda_only_balanced(
         # Use basin hopping for exploring multiple basins
         minimizer_kwargs = {
             "method": "L-BFGS-B",
-            "bounds": [(cda_bounds[0], cda_bounds[1])],  # Proper format for L-BFGS-B
+            "bounds": [
+                (config.cda_bounds[0], config.cda_bounds[1])
+            ],  # Proper format for L-BFGS-B
         }
 
         # Use basin hopping with starting point as a scalar
         # Use scipy.optimize.minimize_scalar first for single parameter optimization
         scalar_result = minimize_scalar(
-            objective, bounds=cda_bounds, method="bounded", options={"xatol": 1e-6}
+            objective,
+            bounds=config.cda_bounds,
+            method="bounded",
+            options={"xatol": 1e-6},
         )
 
         # Then use basin hopping starting from this point
@@ -623,23 +610,17 @@ def optimize_cda_only_balanced(
             f"R²={best_r2:.4f}, RMSE={best_rmse:.2f}m"
         )
 
-    return best_cda, fixed_crr, best_rmse, best_r2, best_profile
+    return best_cda, config.fixed_crr, best_rmse, best_r2, best_profile
 
 
 def optimize_crr_only_balanced(
     df,
     actual_elevation,
-    fixed_cda,
-    kg,
-    rho,
+    config: VirtualElevationConfig,
     n_points=100,  # Reduced for efficiency with multiple starts
     r2_weight=0.5,  # Weight for R² in the composite objective (0-1)
-    dt=1,
-    eta=0.98,
-    vw=0,
     lap_column=None,
     rmse_scale=None,  # Auto-calculated scaling factor for RMSE
-    crr_bounds=(0.001, 0.01),  # Crr typically between 0.001 and 0.01
     n_random_starts=5,  # Number of random starting points
     basin_hopping_steps=30,  # Number of basin hopping steps
     basin_hopping_temp=1.0,  # Temperature parameter for basin hopping
@@ -679,10 +660,12 @@ def optimize_crr_only_balanced(
 
     # Calculate baseline values and scaling factor for RMSE
     if rmse_scale is None:
-        initial_crr = (crr_bounds[0] + crr_bounds[1]) / 2  # Midpoint of crr range
+        initial_crr = (
+            config.crr_bounds[0] + config.crr_bounds[1]
+        ) / 2  # Midpoint of crr range
 
         initial_ve_changes = delta_ve(
-            cda=fixed_cda, crr=initial_crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
+            config, cda=config.fixed_cda, crr=initial_crr, df=df
         )
         initial_virtual_profile = calculate_virtual_profile(
             initial_ve_changes, actual_elevation, lap_column, df
@@ -707,9 +690,7 @@ def optimize_crr_only_balanced(
             crr = float(crr[0])
 
         # Calculate virtual elevation changes
-        ve_changes = delta_ve(
-            cda=fixed_cda, crr=crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=config.fixed_cda, crr=crr, df=df)
 
         # Build virtual elevation profile
         virtual_profile = calculate_virtual_profile(
@@ -730,9 +711,7 @@ def optimize_crr_only_balanced(
 
     # For calculating metrics from a parameter
     def calculate_metrics(crr):
-        ve_changes = delta_ve(
-            cda=fixed_cda, crr=crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=config.fixed_cda, crr=crr, df=df)
         virtual_profile = calculate_virtual_profile(
             ve_changes, actual_elevation, lap_column, df
         )
@@ -744,7 +723,7 @@ def optimize_crr_only_balanced(
         print("Step 1: Initial search across Crr range...")
 
     # Create a linearly spaced array of Crr values to test
-    crr_values = np.linspace(crr_bounds[0], crr_bounds[1], n_points)
+    crr_values = np.linspace(config.crr_bounds[0], config.crr_bounds[1], n_points)
 
     # Evaluate the objective function for each Crr value
     initial_results = []
@@ -775,11 +754,11 @@ def optimize_crr_only_balanced(
     # Define the step-taking function for basin hopping to respect bounds
     def take_step(x):
         # Scale based on the bounds range
-        step_size = (crr_bounds[1] - crr_bounds[0]) * 0.1
+        step_size = (config.crr_bounds[1] - config.crr_bounds[0]) * 0.1
         # Random step within bounds - ensure we keep the same dimension as x
         new_x = x + np.random.uniform(-1, 1, size=x.shape) * step_size
         # Clip to bounds and ensure dimension is preserved
-        return np.clip(new_x, crr_bounds[0], crr_bounds[1])
+        return np.clip(new_x, config.crr_bounds[0], config.crr_bounds[1])
 
     # Define acceptance test function for basin hopping
     def accept_test(f_new, x_new, f_old, x_old):
@@ -804,7 +783,7 @@ def optimize_crr_only_balanced(
 
     # Add random starting points
     for _ in range(n_random_starts - len(starting_points)):
-        random_crr = np.random.uniform(crr_bounds[0], crr_bounds[1])
+        random_crr = np.random.uniform(config.crr_bounds[0], config.crr_bounds[1])
         starting_points.append(random_crr)
 
     # Run optimization from each starting point
@@ -818,13 +797,18 @@ def optimize_crr_only_balanced(
         # Use basin hopping for exploring multiple basins
         minimizer_kwargs = {
             "method": "L-BFGS-B",
-            "bounds": [(crr_bounds[0], crr_bounds[1])],  # Proper format for L-BFGS-B
+            "bounds": [
+                (config.crr_bounds[0], config.crr_bounds[1])
+            ],  # Proper format for L-BFGS-B
         }
 
         # Use basin hopping with starting point as a scalar
         # Use scipy.optimize.minimize_scalar first for single parameter optimization
         scalar_result = minimize_scalar(
-            objective, bounds=crr_bounds, method="bounded", options={"xatol": 1e-6}
+            objective,
+            bounds=config.crr_bounds,
+            method="bounded",
+            options={"xatol": 1e-6},
         )
 
         # Then use basin hopping starting from this point
@@ -870,23 +854,17 @@ def optimize_crr_only_balanced(
             f"R²={best_r2:.4f}, RMSE={best_rmse:.2f}m"
         )
 
-    return fixed_cda, best_crr, best_rmse, best_r2, best_profile
+    return config.fixed_cda, best_crr, best_rmse, best_r2, best_profile
 
 
 def optimize_both_params_for_target_elevation(
     df,
     actual_elevation,
-    kg,
-    rho,
+    config: VirtualElevationConfig,
     target_elevation_gain=0,
     n_grid=250,
-    dt=1,
-    eta=0.98,
-    vw=0,
     lap_column=None,
     is_combined_laps=False,
-    cda_bounds=(0.1, 0.5),
-    crr_bounds=(0.001, 0.01),
     n_random_starts=5,
     basin_hopping_steps=30,
     basin_hopping_temp=1.0,
@@ -926,7 +904,7 @@ def optimize_both_params_for_target_elevation(
     actual_elevation = np.array(actual_elevation)
 
     # Define parameter bounds
-    bounds = [cda_bounds, crr_bounds]
+    bounds = [config.cda_bounds, config.crr_bounds]
 
     # Define the objective function
     def objective(params):
@@ -934,9 +912,7 @@ def optimize_both_params_for_target_elevation(
         cda, crr = params
 
         # Calculate virtual elevation changes
-        ve_changes = delta_ve(
-            cda=cda, crr=crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=cda, crr=crr, df=df)
 
         # Build virtual elevation profile
         virtual_profile = calculate_virtual_profile(
@@ -988,9 +964,7 @@ def optimize_both_params_for_target_elevation(
 
     # For calculating metrics from a parameter set
     def calculate_metrics(cda, crr):
-        ve_changes = delta_ve(
-            cda=cda, crr=crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=cda, crr=crr, df=df)
         virtual_profile = calculate_virtual_profile(
             ve_changes, actual_elevation, lap_column, df
         )
@@ -1050,8 +1024,12 @@ def optimize_both_params_for_target_elevation(
                 )
 
     # Create a grid of points to evaluate
-    cda_grid = np.linspace(cda_bounds[0], cda_bounds[1], int(np.sqrt(n_grid)))
-    crr_grid = np.linspace(crr_bounds[0], crr_bounds[1], int(np.sqrt(n_grid)))
+    cda_grid = np.linspace(
+        config.cda_bounds[0], config.cda_bounds[1], int(np.sqrt(n_grid))
+    )
+    crr_grid = np.linspace(
+        config.crr_bounds[0], config.crr_bounds[1], int(np.sqrt(n_grid))
+    )
 
     # Evaluate objective function at each grid point
     grid_results = []
@@ -1088,15 +1066,15 @@ def optimize_both_params_for_target_elevation(
         # Use a smaller step size as we get closer to convergence
         step_size = np.array(
             [
-                (cda_bounds[1] - cda_bounds[0]) * 0.1,
-                (crr_bounds[1] - crr_bounds[0]) * 0.1,
+                (config.cda_bounds[1] - config.cda_bounds[0]) * 0.1,
+                (config.crr_bounds[1] - config.crr_bounds[0]) * 0.1,
             ]
         )
         # Random step within bounds
         new_x = x + np.random.uniform(-1, 1, size=x.shape) * step_size
         # Clip to bounds
-        new_x[0] = np.clip(new_x[0], cda_bounds[0], cda_bounds[1])
-        new_x[1] = np.clip(new_x[1], crr_bounds[0], crr_bounds[1])
+        new_x[0] = np.clip(new_x[0], config.cda_bounds[0], config.cda_bounds[1])
+        new_x[1] = np.clip(new_x[1], config.crr_bounds[0], config.crr_bounds[1])
         return new_x
 
     # Define acceptance test function for basin hopping
@@ -1123,8 +1101,8 @@ def optimize_both_params_for_target_elevation(
 
     # Add random starting points
     for _ in range(n_random_starts - len(starting_points)):
-        random_cda = np.random.uniform(cda_bounds[0], cda_bounds[1])
-        random_crr = np.random.uniform(crr_bounds[0], crr_bounds[1])
+        random_cda = np.random.uniform(config.cda_bounds[0], config.cda_bounds[1])
+        random_crr = np.random.uniform(config.crr_bounds[0], config.crr_bounds[1])
         starting_points.append((random_cda, random_crr))
 
     # Run optimization from each starting point
@@ -1265,17 +1243,11 @@ def optimize_both_params_for_target_elevation(
 def optimize_cda_only_for_target_elevation(
     df,
     actual_elevation,
-    fixed_crr,
-    kg,
-    rho,
+    config: VirtualElevationConfig,
     target_elevation_gain=0,
     n_points=100,
-    dt=1,
-    eta=0.98,
-    vw=0,
     lap_column=None,
     is_combined_laps=False,
-    cda_bounds=(0.1, 0.5),
     n_random_starts=5,
     basin_hopping_steps=30,
     basin_hopping_temp=1.0,
@@ -1322,9 +1294,7 @@ def optimize_cda_only_for_target_elevation(
             cda = float(cda[0])
 
         # Calculate virtual elevation changes
-        ve_changes = delta_ve(
-            cda=cda, crr=fixed_crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=cda, crr=config.fixed_crr, df=df)
 
         # Build virtual elevation profile
         virtual_profile = calculate_virtual_profile(
@@ -1373,9 +1343,7 @@ def optimize_cda_only_for_target_elevation(
 
     # For calculating metrics from a parameter
     def calculate_metrics(cda):
-        ve_changes = delta_ve(
-            cda=cda, crr=fixed_crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=cda, crr=config.fixed_crr, df=df)
         virtual_profile = calculate_virtual_profile(
             ve_changes, actual_elevation, lap_column, df
         )
@@ -1435,7 +1403,7 @@ def optimize_cda_only_for_target_elevation(
                 )
 
     # Create a linearly spaced array of CdA values to test
-    cda_values = np.linspace(cda_bounds[0], cda_bounds[1], n_points)
+    cda_values = np.linspace(config.cda_bounds[0], config.cda_bounds[1], n_points)
 
     # Evaluate the objective function for each CdA value
     initial_results = []
@@ -1467,11 +1435,11 @@ def optimize_cda_only_for_target_elevation(
     # Define the step-taking function for basin hopping to respect bounds
     def take_step(x):
         # Scale based on the bounds range
-        step_size = (cda_bounds[1] - cda_bounds[0]) * 0.1
+        step_size = (config.cda_bounds[1] - config.cda_bounds[0]) * 0.1
         # Random step within bounds - ensure we keep the same dimension as x
         new_x = x + np.random.uniform(-1, 1, size=x.shape) * step_size
         # Clip to bounds and ensure dimension is preserved
-        return np.clip(new_x, cda_bounds[0], cda_bounds[1])
+        return np.clip(new_x, config.cda_bounds[0], config.cda_bounds[1])
 
     # Define acceptance test function for basin hopping
     def accept_test(f_new, x_new, f_old, x_old):
@@ -1496,7 +1464,7 @@ def optimize_cda_only_for_target_elevation(
 
     # Add random starting points
     for _ in range(n_random_starts - len(starting_points)):
-        random_cda = np.random.uniform(cda_bounds[0], cda_bounds[1])
+        random_cda = np.random.uniform(config.cda_bounds[0], config.cda_bounds[1])
         starting_points.append(random_cda)
 
     # Run optimization from each starting point
@@ -1510,12 +1478,17 @@ def optimize_cda_only_for_target_elevation(
         # Use basin hopping for exploring multiple basins
         minimizer_kwargs = {
             "method": "L-BFGS-B",
-            "bounds": [(cda_bounds[0], cda_bounds[1])],  # Proper format for L-BFGS-B
+            "bounds": [
+                (config.cda_bounds[0], config.cda_bounds[1])
+            ],  # Proper format for L-BFGS-B
         }
 
         # Use scipy.optimize.minimize_scalar first for single parameter optimization
         scalar_result = minimize_scalar(
-            objective, bounds=cda_bounds, method="bounded", options={"xatol": 1e-6}
+            objective,
+            bounds=config.cda_bounds,
+            method="bounded",
+            options={"xatol": 1e-6},
         )
 
         # Then use basin hopping starting from this point
@@ -1602,23 +1575,17 @@ def optimize_cda_only_for_target_elevation(
                     f"R²={best_r2:.4f}, RMSE={best_rmse:.2f}m"
                 )
 
-    return best_cda, fixed_crr, best_rmse, best_r2, best_profile
+    return best_cda, config.fixed_crr, best_rmse, best_r2, best_profile
 
 
 def optimize_crr_only_for_target_elevation(
     df,
     actual_elevation,
-    fixed_cda,
-    kg,
-    rho,
+    config: VirtualElevationConfig,
     target_elevation_gain=0,
     n_points=100,
-    dt=1,
-    eta=0.98,
-    vw=0,
     lap_column=None,
     is_combined_laps=False,
-    crr_bounds=(0.001, 0.01),
     n_random_starts=5,
     basin_hopping_steps=30,
     basin_hopping_temp=1.0,
@@ -1665,9 +1632,7 @@ def optimize_crr_only_for_target_elevation(
             crr = float(crr[0])
 
         # Calculate virtual elevation changes
-        ve_changes = delta_ve(
-            cda=fixed_cda, crr=crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=config.fixed_cda, crr=crr, df=df)
 
         # Build virtual elevation profile
         virtual_profile = calculate_virtual_profile(
@@ -1716,9 +1681,7 @@ def optimize_crr_only_for_target_elevation(
 
     # For calculating metrics from a parameter
     def calculate_metrics(crr):
-        ve_changes = delta_ve(
-            cda=fixed_cda, crr=crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=config.fixed_cda, crr=crr, df=df)
         virtual_profile = calculate_virtual_profile(
             ve_changes, actual_elevation, lap_column, df
         )
@@ -1778,7 +1741,7 @@ def optimize_crr_only_for_target_elevation(
                 )
 
     # Create a linearly spaced array of Crr values to test
-    crr_values = np.linspace(crr_bounds[0], crr_bounds[1], n_points)
+    crr_values = np.linspace(config.crr_bounds[0], config.crr_bounds[1], n_points)
 
     # Evaluate the objective function for each Crr value
     initial_results = []
@@ -1810,11 +1773,11 @@ def optimize_crr_only_for_target_elevation(
     # Define the step-taking function for basin hopping to respect bounds
     def take_step(x):
         # Scale based on the bounds range
-        step_size = (crr_bounds[1] - crr_bounds[0]) * 0.1
+        step_size = (config.crr_bounds[1] - config.crr_bounds[0]) * 0.1
         # Random step within bounds - ensure we keep the same dimension as x
         new_x = x + np.random.uniform(-1, 1, size=x.shape) * step_size
         # Clip to bounds and ensure dimension is preserved
-        return np.clip(new_x, crr_bounds[0], crr_bounds[1])
+        return np.clip(new_x, config.crr_bounds[0], config.crr_bounds[1])
 
     # Define acceptance test function for basin hopping
     def accept_test(f_new, x_new, f_old, x_old):
@@ -1839,7 +1802,7 @@ def optimize_crr_only_for_target_elevation(
 
     # Add random starting points
     for _ in range(n_random_starts - len(starting_points)):
-        random_crr = np.random.uniform(crr_bounds[0], crr_bounds[1])
+        random_crr = np.random.uniform(config.crr_bounds[0], config.crr_bounds[1])
         starting_points.append(random_crr)
 
     # Run optimization from each starting point
@@ -1853,12 +1816,17 @@ def optimize_crr_only_for_target_elevation(
         # Use basin hopping for exploring multiple basins
         minimizer_kwargs = {
             "method": "L-BFGS-B",
-            "bounds": [(crr_bounds[0], crr_bounds[1])],  # Proper format for L-BFGS-B
+            "bounds": [
+                (config.crr_bounds[0], config.crr_bounds[1])
+            ],  # Proper format for L-BFGS-B
         }
 
         # Use scipy.optimize.minimize_scalar first for single parameter optimization
         scalar_result = minimize_scalar(
-            objective, bounds=crr_bounds, method="bounded", options={"xatol": 1e-6}
+            objective,
+            bounds=config.crr_bounds,
+            method="bounded",
+            options={"xatol": 1e-6},
         )
 
         # Then use basin hopping starting from this point
@@ -1945,4 +1913,4 @@ def optimize_crr_only_for_target_elevation(
                     f"R²={best_r2:.4f}, RMSE={best_rmse:.2f}m"
                 )
 
-    return fixed_cda, best_crr, best_rmse, best_r2, best_profile
+    return config.fixed_cda, best_crr, best_rmse, best_r2, best_profile

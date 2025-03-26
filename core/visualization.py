@@ -1,10 +1,11 @@
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.widgets import Slider, Button
+from matplotlib.widgets import Button, Slider
 from scipy.stats import pearsonr
 
 from core.calculations import calculate_distance, delta_ve
+from core.config import VirtualElevationConfig
 from core.optimization import calculate_virtual_profile
 
 plt.style.use("fivethirtyeight")
@@ -187,11 +188,7 @@ def create_interactive_elevation_plot(
     initial_cda,
     initial_crr,
     distance=None,
-    kg=None,
-    rho=None,
-    dt=1,
-    eta=0.98,
-    vw=0,
+    config: VirtualElevationConfig = None,
     lap_column=None,
     cda_range=None,
     crr_range=None,
@@ -227,13 +224,13 @@ def create_interactive_elevation_plot(
                where saved_params is (cda, crr) if save button was clicked, else None
     """
     import matplotlib.pyplot as plt
-    from matplotlib.widgets import Slider, Button
     import numpy as np
+    from matplotlib.widgets import Button, Slider
     from scipy.stats import pearsonr
 
     plt.ioff()
 
-    if kg is None or rho is None:
+    if config.kg is None or config.rho is None:
         raise ValueError(
             "Rider mass (kg) and air density (rho) are required parameters"
         )
@@ -248,9 +245,7 @@ def create_interactive_elevation_plot(
     distance_km = distance / 1000
 
     # Calculate initial virtual elevation using provided parameters
-    initial_ve_changes = delta_ve(
-        cda=initial_cda, crr=initial_crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-    )
+    initial_ve_changes = delta_ve(config, cda=initial_cda, crr=initial_crr, df=df)
     initial_virtual_elevation = calculate_virtual_profile(
         initial_ve_changes, actual_elevation, lap_column, df
     )
@@ -440,9 +435,7 @@ def create_interactive_elevation_plot(
         crr = crr_slider.val
 
         # Calculate new virtual elevation
-        ve_changes = delta_ve(
-            cda=cda, crr=crr, df=df, vw=vw, kg=kg, rho=rho, dt=dt, eta=eta
-        )
+        ve_changes = delta_ve(config, cda=cda, crr=crr, df=df)
         virtual_elevation = calculate_virtual_profile(
             ve_changes, actual_elevation, lap_column, df
         )
@@ -766,11 +759,11 @@ def create_interactive_trim_map(
         tuple: (action, trim_start, trim_end) where action is "optimize" or "skip"
     """
     try:
-        import matplotlib.pyplot as plt
-        from matplotlib.widgets import Slider, Button
-        import numpy as np
         import contextily as ctx
         import geopandas as gpd
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from matplotlib.widgets import Button, Slider
         from shapely.geometry import LineString, Point
     except ImportError:
         print("To use interactive mapping, install the required packages:")
@@ -1077,15 +1070,11 @@ def create_combined_interactive_plot(
     df,
     actual_elevation,
     lap_num,
-    rider_mass,
-    air_density,
+    config: VirtualElevationConfig,
     initial_cda=0.3,
     initial_crr=0.005,
     initial_trim_start=0,
     initial_trim_end=0,
-    dt=1,
-    eta=0.98,
-    vw=0,
     cda_range=None,
     crr_range=None,
     save_path=None,
@@ -1121,12 +1110,13 @@ def create_combined_interactive_plot(
     Returns:
         tuple: (action, trim_start, trim_end, cda, crr, rmse, r2)
     """
-    import matplotlib.pyplot as plt
-    import matplotlib.gridspec as gridspec
-    from matplotlib.widgets import Slider, Button
-    import numpy as np
-    from scipy.stats import pearsonr
     import time
+
+    import matplotlib.gridspec as gridspec
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.widgets import Button, Slider
+    from scipy.stats import pearsonr
 
     try:
         import contextily as ctx
@@ -1158,7 +1148,7 @@ def create_combined_interactive_plot(
 
     # Calculate distance if not provided
     if distance is None:
-        distance = calculate_distance(df, dt)
+        distance = calculate_distance(df, config.dt)
 
     # Calculate total distance
     total_distance = distance[-1]
@@ -1749,9 +1739,8 @@ def create_combined_interactive_plot(
             if "timestamp" in trimmed_df.columns:
                 dt_values = trimmed_df["timestamp"].diff().dt.total_seconds()
                 avg_dt = dt_values[1:].mean()  # skip first row which is NaN
-                adjusted_dt = avg_dt if not np.isnan(avg_dt) else dt
-            else:
-                adjusted_dt = dt
+                adjusted_dt = avg_dt if not np.isnan(avg_dt) else config.dt
+                config.dt = adjusted_dt
 
             # Calculate acceleration if needed
             if "a" not in trimmed_df.columns:
@@ -1766,9 +1755,7 @@ def create_combined_interactive_plot(
                     optimization_function(
                         df=trimmed_df,
                         actual_elevation=trimmed_elevation,
-                        kg=rider_mass,
-                        rho=air_density,
-                        dt=adjusted_dt,
+                        config=config,
                         initial_cda=cda_slider.val,
                         initial_crr=crr_slider.val,
                         target_elevation_gain=target_elevation_gain,
@@ -1781,14 +1768,7 @@ def create_combined_interactive_plot(
 
                 # Calculate virtual elevation with current parameters for trimmed region
                 ve_changes = delta_ve(
-                    cda=optimized_cda,
-                    crr=optimized_crr,
-                    df=trimmed_df,
-                    vw=vw,
-                    kg=rider_mass,
-                    rho=air_density,
-                    dt=adjusted_dt,
-                    eta=eta,
+                    config, cda=optimized_cda, crr=optimized_crr, df=trimmed_df
                 )
 
                 # Build virtual elevation profile for trimmed region
@@ -1862,16 +1842,7 @@ def create_combined_interactive_plot(
             elevation_features["actual_line"].set_ydata(actual_elevation)
 
             # Calculate virtual elevation for the FULL profile
-            ve_changes = delta_ve(
-                cda=cda,
-                crr=crr,
-                df=df,
-                vw=vw,
-                kg=rider_mass,
-                rho=air_density,
-                dt=dt,
-                eta=eta,
-            )
+            ve_changes = delta_ve(config, cda=cda, crr=crr, df=df)
 
             # Build full virtual elevation profile
             full_virtual = calculate_virtual_profile(
@@ -2127,14 +2098,7 @@ def create_combined_interactive_plot(
 
             # Calculate virtual elevation with current parameters
             ve_changes = delta_ve(
-                cda=current_cda,
-                crr=current_crr,
-                df=trimmed_df,
-                vw=vw,
-                kg=rider_mass,
-                rho=air_density,
-                dt=dt,
-                eta=eta,
+                config, cda=current_cda, crr=current_crr, df=trimmed_df
             )
 
             # Build virtual elevation profile
@@ -2195,9 +2159,8 @@ def create_combined_interactive_plot(
         if "timestamp" in trimmed_df.columns:
             dt_values = trimmed_df["timestamp"].diff().dt.total_seconds()
             avg_dt = dt_values[1:].mean()  # skip first row which is NaN
-            adjusted_dt = avg_dt if not np.isnan(avg_dt) else dt
-        else:
-            adjusted_dt = dt
+            adjusted_dt = avg_dt if not np.isnan(avg_dt) else config.dt
+            config.dt = adjusted_dt
 
         # Calculate acceleration if needed
         if "a" not in trimmed_df.columns:
@@ -2206,16 +2169,7 @@ def create_combined_interactive_plot(
             trimmed_df["a"] = accel_calc(trimmed_df["v"].values, adjusted_dt)
 
         # Calculate virtual elevation with current parameters
-        ve_changes = delta_ve(
-            cda=cda,
-            crr=crr,
-            df=trimmed_df,
-            vw=vw,
-            kg=rider_mass,
-            rho=air_density,
-            dt=adjusted_dt,
-            eta=eta,
-        )
+        ve_changes = delta_ve(config, cda=cda, crr=crr, df=trimmed_df)
 
         # Build virtual elevation profile
         virtual_profile = calculate_virtual_profile(
