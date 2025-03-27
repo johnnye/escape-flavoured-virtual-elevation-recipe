@@ -1169,16 +1169,20 @@ def create_combined_interactive_plot(
 
     # Create grid layout with different areas for map, elevation plot, residuals
     # Removed the route plot and adjusted the grid
-    gs = gridspec.GridSpec(3, 1, height_ratios=[3, 2, 1])
+    gs = gridspec.GridSpec(3, 2, height_ratios=[3, 2, 1], width_ratios=[4, 1])
 
-    # Map view
-    ax_map = fig.add_subplot(gs[0])
+    # Map view (left side of top row)
+    ax_map = fig.add_subplot(gs[0, 0])
 
-    # Elevation plot for both actual and virtual profiles
-    ax_elevation = fig.add_subplot(gs[1])
+    # Legend/metrics area (right side of top row)
+    ax_legend = fig.add_subplot(gs[0, 1])
+    ax_legend.axis("off")  # Hide axis
 
-    # Residuals plot aligned with elevation plot (share x-axis for alignment)
-    ax_residual = fig.add_subplot(gs[2], sharex=ax_elevation)
+    # Elevation plot spanning both columns in middle row
+    ax_elevation = fig.add_subplot(gs[1, :])
+
+    # Residuals plot spanning both columns in bottom row
+    ax_residual = fig.add_subplot(gs[2, :], sharex=ax_elevation)
 
     # Status area at bottom (hidden)
     ax_status = fig.add_subplot(gs[2, :])
@@ -1501,7 +1505,9 @@ def create_combined_interactive_plot(
         ax_residual.axhline(y=0, color="k", linestyle="-", alpha=0.3)
 
         # Add legend
-        ax_elevation.legend(loc="best")
+        # Create legend in the legend area
+        handles, labels = ax_elevation.get_legend_handles_labels()
+        ax_legend.legend(handles, labels, loc="upper right")
 
         # Add trim lines
         start_km = initial_trim_start / 1000
@@ -1537,11 +1543,11 @@ def create_combined_interactive_plot(
         # Add metrics text box
         props = dict(boxstyle="round", facecolor="wheat", alpha=0.5)
         metrics_text = "Press 'Optimize' to start analysis"
-        elevation_features["metrics_box"] = ax_elevation.text(
+        elevation_features["metrics_box"] = ax_legend.text(
             0.95,
-            0.95,
+            0.50,
             metrics_text,
-            transform=ax_elevation.transAxes,
+            transform=ax_legend.transAxes,
             fontsize=10,
             verticalalignment="top",
             horizontalalignment="right",
