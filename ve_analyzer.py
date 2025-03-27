@@ -1248,6 +1248,7 @@ def analyze_combined_laps(
                     actual_elevation=actual_elevation,
                     config=config,
                     target_elevation_gain=target_elevation_gain,
+                    lap_column="lap_number",
                     is_combined_laps=True,  # Always true for combined laps
                 )
 
@@ -1263,6 +1264,7 @@ def analyze_combined_laps(
                     actual_elevation=actual_elevation,
                     config=config,
                     target_elevation_gain=target_elevation_gain,
+                    lap_column="lap_number",
                     is_combined_laps=True,  # Always true for combined laps
                 )
 
@@ -1278,6 +1280,7 @@ def analyze_combined_laps(
                     actual_elevation=actual_elevation,
                     config=config,
                     target_elevation_gain=target_elevation_gain,
+                    lap_column="lap_number",
                     is_combined_laps=True,  # Always true for combined laps
                 )
         else:
@@ -1311,6 +1314,7 @@ def analyze_combined_laps(
                     df=df,
                     actual_elevation=actual_elevation,
                     config=config,
+                    lap_column="lap_number",
                     r2_weight=r2_weight,
                 )
 
@@ -1323,6 +1327,7 @@ def analyze_combined_laps(
                     df=df,
                     actual_elevation=actual_elevation,
                     config=config,
+                    lap_column="lap_number",
                     r2_weight=r2_weight,
                 )
 
@@ -1336,6 +1341,7 @@ def analyze_combined_laps(
                     actual_elevation=actual_elevation,
                     config=config,
                     r2_weight=r2_weight,
+                    lap_column="lap_number",
                     n_grid=n_grid,
                 )
 

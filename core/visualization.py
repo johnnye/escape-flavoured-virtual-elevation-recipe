@@ -87,6 +87,7 @@ class MapComponent(BaseComponent):
             from shapely.geometry import LineString, Point
 
             df = self.parent.df
+            lap_column = self.parent.lap_column
 
             # Check if we have GPS data
             if "latitude" not in df.columns or "longitude" not in df.columns:
@@ -100,14 +101,34 @@ class MapComponent(BaseComponent):
                 )
                 return False
 
-            # Create points for the full route
-            points = [
-                Point(lon, lat) for lon, lat in zip(df["longitude"], df["latitude"])
-            ]
-            route_line = LineString(points)
+            # Create separate route lines for each lap instead of a single continuous line
+            if lap_column is not None and lap_column in df.columns:
+                lap_numbers = df[lap_column].values
+                unique_laps = sorted(np.unique(lap_numbers))
+                geometries = []
 
-            # Create GeoDataFrame for the route line
-            gdf_line = gpd.GeoDataFrame(geometry=[route_line], crs="EPSG:4326")
+                for lap in unique_laps:
+                    lap_mask = lap_numbers == lap
+                    lap_points = [
+                        Point(lon, lat)
+                        for lon, lat in zip(
+                            df.loc[lap_mask, "longitude"], df.loc[lap_mask, "latitude"]
+                        )
+                    ]
+                    if len(lap_points) > 1:
+                        geometries.append(LineString(lap_points))
+
+                # Create GeoDataFrame for all lap lines
+                gdf_line = gpd.GeoDataFrame(geometry=geometries, crs="EPSG:4326")
+
+            else:
+                # Original code for single continuous route
+                points = [
+                    Point(lon, lat) for lon, lat in zip(df["longitude"], df["latitude"])
+                ]
+                route_line = LineString(points)
+                gdf_line = gpd.GeoDataFrame(geometry=[route_line], crs="EPSG:4326")
+
             gdf_line = gdf_line.to_crs(epsg=3857)  # Convert to Web Mercator
 
             # Plot original route
@@ -274,6 +295,7 @@ class ElevationProfileComponent(BaseComponent):
         df = self.parent.df
         distance = self.parent.distance
         actual_elevation = self.parent.actual_elevation
+        lap_column = self.parent.lap_column
 
         # Convert distance to km for plotting
         distance_km = distance / 1000
@@ -306,6 +328,47 @@ class ElevationProfileComponent(BaseComponent):
             [], [], "r-", linewidth=2, alpha=0.3, label="_nolegend_"
         )
 
+        # Add vertical lines for lap boundaries if lap column is provided
+        if lap_column is not None and lap_column in df.columns:
+            lap_numbers = df[lap_column].values
+            unique_laps = sorted(np.unique(lap_numbers))
+
+            # Add vertical lines at lap transitions
+            for i in range(1, len(unique_laps)):
+                # Find the first index of the new lap
+                transition_idx = np.where(lap_numbers == unique_laps[i])[0][0]
+
+                # Check if the laps are consecutive
+                if unique_laps[i] != unique_laps[i - 1] + 1:
+                    # Non-consecutive laps: add a green dashed line
+                    self.ax.axvline(
+                        x=distance_km[transition_idx],
+                        color="green",
+                        linestyle="--",
+                        alpha=0.7,
+                    )
+                    line_label = f"Lap {unique_laps[i]} (Reset)"
+                else:
+                    # Consecutive laps: add a blue dotted line
+                    self.ax.axvline(
+                        x=distance_km[transition_idx],
+                        color="blue",
+                        linestyle=":",
+                        alpha=0.5,
+                    )
+                    line_label = f"Lap {unique_laps[i]}"
+
+                # Add lap number labels
+                if transition_idx > 0:
+                    self.ax.text(
+                        distance_km[transition_idx] + 0.1,
+                        np.min(actual_elevation)
+                        + 0.1 * (np.max(actual_elevation) - np.min(actual_elevation)),
+                        line_label,
+                        rotation=90,
+                        va="bottom",
+                    )
+
         # Initialize trim lines
         self.trim_start_line = self.ax.axvline(
             x=0, color="green", linewidth=1.5, linestyle="--", visible=False
@@ -319,7 +382,7 @@ class ElevationProfileComponent(BaseComponent):
         self.ylim = (np.min(actual_elevation) - 10, np.max(actual_elevation) + 10)
 
         # Create legend but return handles and labels
-        self.ax.legend(loc="upper right")
+        # self.ax.legend(loc="upper right")
         return self.ax.get_legend_handles_labels()
 
     def update_trim_lines(self, trim_start, trim_end):
@@ -427,6 +490,7 @@ class ResidualPlotComponent(BaseComponent):
         """Initialize the residual plot"""
         df = self.parent.df
         distance = self.parent.distance
+        lap_column = self.parent.lap_column
 
         # Convert distance to km for plotting
         distance_km = distance / 1000
@@ -456,6 +520,34 @@ class ResidualPlotComponent(BaseComponent):
         (self.residual_line_post,) = self.ax.plot(
             [], [], "g-", linewidth=1.5, alpha=0.3, label="_nolegend_"
         )
+
+        # Add vertical lines for lap boundaries if lap column is provided
+        if lap_column is not None and lap_column in df.columns:
+            lap_numbers = df[lap_column].values
+            unique_laps = sorted(np.unique(lap_numbers))
+
+            # Add vertical lines at lap transitions
+            for i in range(1, len(unique_laps)):
+                # Find the first index of the new lap
+                transition_idx = np.where(lap_numbers == unique_laps[i])[0][0]
+
+                # Check if the laps are consecutive
+                if unique_laps[i] != unique_laps[i - 1] + 1:
+                    # Non-consecutive laps: add a green dashed line
+                    self.ax.axvline(
+                        x=distance_km[transition_idx],
+                        color="green",
+                        linestyle="--",
+                        alpha=0.7,
+                    )
+                else:
+                    # Consecutive laps: add a blue dotted line
+                    self.ax.axvline(
+                        x=distance_km[transition_idx],
+                        color="blue",
+                        linestyle=":",
+                        alpha=0.5,
+                    )
 
         # Initialize trim lines
         self.trim_start_line = self.ax.axvline(
