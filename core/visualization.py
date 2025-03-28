@@ -78,16 +78,24 @@ class MapComponent(BaseComponent):
         self.route_line = None
         self.map_initialized = False
 
+    # Update the initialize method in the MapComponent class to color the route by wind effect
+
     def initialize(self):
-        """Initialize the map with the route"""
+        """Initialize the map with the route colored by wind direction effect"""
         try:
             # Only import these if needed
             import contextily as ctx
             import geopandas as gpd
+            import matplotlib.pyplot as plt
+            import numpy as np
+            from matplotlib.colors import Normalize
+            from matplotlib.cm import ScalarMappable
+            from matplotlib.patches import Patch
             from shapely.geometry import LineString, Point
 
             df = self.parent.df
             lap_column = self.parent.lap_column
+            config = self.parent.config
 
             # Check if we have GPS data
             if "latitude" not in df.columns or "longitude" not in df.columns:
@@ -101,38 +109,158 @@ class MapComponent(BaseComponent):
                 )
                 return False
 
-            # Create separate route lines for each lap instead of a single continuous line
+            # Check if we have wind direction data
+            has_wind_direction = (
+                hasattr(config, "wind_direction")
+                and config.wind_direction is not None
+                and config.vw > 0
+            )
+
+            # Calculate effective wind if we have wind direction
+            effective_wind = None
+            if has_wind_direction:
+                from core.calculations import calculate_effective_wind
+
+                effective_wind = calculate_effective_wind(df, config)
+
+            # Create line geometries for each lap or segment
             if lap_column is not None and lap_column in df.columns:
                 lap_numbers = df[lap_column].values
                 unique_laps = sorted(np.unique(lap_numbers))
-                geometries = []
 
-                for lap in unique_laps:
-                    lap_mask = lap_numbers == lap
-                    lap_points = [
-                        Point(lon, lat)
-                        for lon, lat in zip(
-                            df.loc[lap_mask, "longitude"], df.loc[lap_mask, "latitude"]
-                        )
-                    ]
-                    if len(lap_points) > 1:
-                        geometries.append(LineString(lap_points))
+                # For wind effect coloring, we'll need to plot each segment individually
+                # rather than whole laps, if wind direction is available
+                if has_wind_direction:
+                    for lap in unique_laps:
+                        lap_mask = lap_numbers == lap
+                        lap_indices = np.where(lap_mask)[0]
 
-                # Create GeoDataFrame for all lap lines
-                gdf_line = gpd.GeoDataFrame(geometry=geometries, crs="EPSG:4326")
+                        if len(lap_indices) < 2:
+                            continue
 
+                        # Plot each segment within the lap with appropriate color
+                        for i in range(len(lap_indices) - 1):
+                            idx1 = lap_indices[i]
+                            idx2 = lap_indices[i + 1]
+
+                            if effective_wind is not None:
+                                # Use cool-warm colormap (blue for tailwind, red for headwind)
+                                # Normalize wind to [-wind_speed, wind_speed] range
+                                norm = Normalize(vmin=-config.vw, vmax=config.vw)
+                                cmap = plt.cm.coolwarm
+                                color = cmap(norm(effective_wind[idx1]))
+                            else:
+                                color = "blue"
+
+                            # Create a line for this segment
+                            x1, y1 = (
+                                df["longitude"].iloc[idx1],
+                                df["latitude"].iloc[idx1],
+                            )
+                            x2, y2 = (
+                                df["longitude"].iloc[idx2],
+                                df["latitude"].iloc[idx2],
+                            )
+                            line = LineString([(x1, y1), (x2, y2)])
+
+                            # Create GeoDataFrame and plot
+                            gdf_segment = gpd.GeoDataFrame(
+                                geometry=[line], crs="EPSG:4326"
+                            ).to_crs(epsg=3857)
+                            gdf_segment.plot(
+                                ax=self.ax, color=color, linewidth=3, alpha=0.8
+                            )
+                else:
+                    # Original code for lap lines without wind color
+                    geometries = []
+                    for lap in unique_laps:
+                        lap_mask = lap_numbers == lap
+                        lap_points = [
+                            Point(lon, lat)
+                            for lon, lat in zip(
+                                df.loc[lap_mask, "longitude"],
+                                df.loc[lap_mask, "latitude"],
+                            )
+                        ]
+                        if len(lap_points) > 1:
+                            geometries.append(LineString(lap_points))
+
+                    # Create GeoDataFrame for all lap lines
+                    gdf_line = gpd.GeoDataFrame(
+                        geometry=geometries, crs="EPSG:4326"
+                    ).to_crs(epsg=3857)
+                    # Plot original route
+                    gdf_line.plot(ax=self.ax, color="blue", linewidth=2, alpha=0.5)
             else:
-                # Original code for single continuous route
-                points = [
-                    Point(lon, lat) for lon, lat in zip(df["longitude"], df["latitude"])
-                ]
-                route_line = LineString(points)
-                gdf_line = gpd.GeoDataFrame(geometry=[route_line], crs="EPSG:4326")
+                # For a single route (no laps)
+                if has_wind_direction:
+                    # Plot each segment with appropriate color
+                    for i in range(len(df) - 1):
+                        if effective_wind is not None:
+                            # Use cool-warm colormap (blue for tailwind, red for headwind)
+                            norm = Normalize(vmin=-config.vw, vmax=config.vw)
+                            cmap = plt.cm.coolwarm
+                            color = cmap(norm(effective_wind[i]))
+                        else:
+                            color = "blue"
 
-            gdf_line = gdf_line.to_crs(epsg=3857)  # Convert to Web Mercator
+                        # Create a line for this segment
+                        x1, y1 = df["longitude"].iloc[i], df["latitude"].iloc[i]
+                        x2, y2 = df["longitude"].iloc[i + 1], df["latitude"].iloc[i + 1]
+                        line = LineString([(x1, y1), (x2, y2)])
 
-            # Plot original route
-            gdf_line.plot(ax=self.ax, color="blue", linewidth=2, alpha=0.5)
+                        # Create GeoDataFrame and plot
+                        gdf_segment = gpd.GeoDataFrame(
+                            geometry=[line], crs="EPSG:4326"
+                        ).to_crs(epsg=3857)
+                        gdf_segment.plot(
+                            ax=self.ax, color=color, linewidth=3, alpha=0.8
+                        )
+
+                    # Add a colorbar if we have wind direction
+                    if effective_wind is not None:
+                        sm = ScalarMappable(cmap=cmap, norm=norm)
+                        sm.set_array([])
+                        cbar = plt.colorbar(
+                            sm,
+                            ax=self.ax,
+                            orientation="horizontal",
+                            pad=0.05,
+                            shrink=0.5,
+                        )
+                        cbar.set_label("Wind Effect (m/s)", fontsize=10)
+                        cbar.ax.text(
+                            0.25,
+                            0.5,
+                            "Tailwind",
+                            transform=cbar.ax.transAxes,
+                            ha="center",
+                            va="center",
+                            fontsize=8,
+                            color="blue",
+                        )
+                        cbar.ax.text(
+                            0.75,
+                            0.5,
+                            "Headwind",
+                            transform=cbar.ax.transAxes,
+                            ha="center",
+                            va="center",
+                            fontsize=8,
+                            color="red",
+                        )
+                else:
+                    # Original code for single continuous route without wind color
+                    points = [
+                        Point(lon, lat)
+                        for lon, lat in zip(df["longitude"], df["latitude"])
+                    ]
+                    route_line = LineString(points)
+                    gdf_line = gpd.GeoDataFrame(
+                        geometry=[route_line], crs="EPSG:4326"
+                    ).to_crs(epsg=3857)
+                    # Plot original route
+                    gdf_line.plot(ax=self.ax, color="blue", linewidth=2, alpha=0.5)
 
             # Initial start and end points (0% and 100% of route)
             start_point = Point(df["longitude"].iloc[0], df["latitude"].iloc[0])
@@ -163,8 +291,8 @@ class MapComponent(BaseComponent):
             )
 
             # Add OpenStreetMap background
-            bounds = gdf_line.total_bounds
-            max_dimension = max(bounds[2] - bounds[0], bounds[3] - bounds[1])
+            bounds = self.ax.get_xlim() + self.ax.get_ylim()
+            max_dimension = max(bounds[1] - bounds[0], bounds[3] - bounds[2])
 
             # Determine appropriate zoom level
             zoom = 12  # Default
@@ -199,9 +327,17 @@ class MapComponent(BaseComponent):
                 if self.parent.lap_num > 0
                 else "Combined Laps"
             )
-            self.ax.set_title(
-                f"{lap_title} - Adjust Start and End Trim Points", fontsize=14
-            )
+
+            title = f"{lap_title} - Adjust Start and End Trim Points"
+
+            # Add wind info to title if available
+            if has_wind_direction:
+                title += f"\nWind: {config.vw:.1f} m/s from {config.wind_direction:.0f}° (Red=Headwind, Blue=Tailwind)"
+
+            self.ax.set_title(title, fontsize=12)
+
+            # Add wind arrow
+            self.add_wind_arrow()
 
             self.map_initialized = True
             return True
@@ -229,6 +365,83 @@ class MapComponent(BaseComponent):
                 transform=self.ax.transAxes,
             )
             return False
+
+    def add_wind_arrow(self):
+        """Add a wind direction arrow to the map."""
+        # Check if we have wind direction in the config
+        if (
+            not hasattr(self.parent.config, "wind_direction")
+            or self.parent.config.wind_direction is None
+        ):
+            return
+
+        # Get wind parameters
+        wind_speed = self.parent.config.vw
+        wind_direction = self.parent.config.wind_direction
+
+        # Skip if no wind
+        if wind_speed == 0:
+            return
+
+        try:
+            import numpy as np
+            import matplotlib.patheffects as path_effects
+
+            # Convert from meteorological to mathematical angles
+            # Meteorological: 0° = North, 90° = East, 180° = South, 270° = West
+            # Mathematical: 0° = East, 90° = North, 180° = West, 270° = South
+            math_angle = (90 - wind_direction) % 360
+            math_angle_rad = np.radians(math_angle)
+
+            # Position in axes coordinates (top right corner)
+            arrow_x = 0.95
+            arrow_y = 0.95
+
+            # Set arrow length based on wind speed (normalized to some extent)
+            base_length = 0.5  # Base arrow length in axes coordinates
+            arrow_length = min(base_length, base_length * (wind_speed / 10))
+
+            # Calculate arrow starting point (wind source)
+            dx = arrow_length * np.cos(math_angle_rad)
+            dy = arrow_length * np.sin(math_angle_rad)
+            start_x = arrow_x + dx
+            start_y = arrow_y + dy
+
+            # Create arrow pointing FROM the wind source TO the destination
+            arrow = self.ax.annotate(
+                "",
+                xy=(arrow_x, arrow_y),  # Arrow end (destination)
+                xytext=(start_x, start_y),  # Arrow start (wind source)
+                xycoords="axes fraction",
+                textcoords="axes fraction",
+                arrowprops=dict(
+                    arrowstyle="->",
+                    lw=2,
+                    color="blue",
+                    shrinkA=5,
+                    shrinkB=5,
+                    path_effects=[
+                        path_effects.withStroke(linewidth=4, foreground="white")
+                    ],
+                ),
+            )
+
+            # Add wind speed label
+            text = self.ax.text(
+                arrow_x,
+                arrow_y + 0.05,
+                f"Wind: {wind_speed:.1f} m/s from {wind_direction:.0f}°",
+                transform=self.ax.transAxes,
+                ha="right",
+                va="bottom",
+                fontsize=10,
+                color="blue",
+                fontweight="bold",
+                path_effects=[path_effects.withStroke(linewidth=3, foreground="white")],
+            )
+
+        except Exception as e:
+            print(f"Error adding wind arrow: {e}")
 
     def update_trim_points(self, start_idx, end_idx):
         """Update the map trim points based on dataframe indices"""
@@ -1742,3 +1955,178 @@ def create_interactive_map(df, save_path=None):
         map_obj.save(save_path)
 
     return map_obj
+
+
+def visualize_wind_effect(df, wind_speed, wind_direction):
+    """
+    Visualize the effect of wind on a rider throughout the course.
+
+    Args:
+        df (pandas.DataFrame): DataFrame with latitude/longitude data
+        wind_speed (float): Wind speed in m/s
+        wind_direction (float): Wind direction in degrees (meteorological convention)
+
+    Returns:
+        matplotlib.figure.Figure: The created figure
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.colors import Normalize
+    from matplotlib.cm import ScalarMappable
+    import matplotlib.patheffects as path_effects
+
+    # Create VirtualElevationConfig with wind parameters
+    from core.config import VirtualElevationConfig
+
+    config = VirtualElevationConfig(
+        rider_mass=70,  # Dummy value, not used for this visualization
+        air_density=1.225,  # Dummy value, not used for this visualization
+        wind_velocity=wind_speed,
+        wind_direction=wind_direction,
+    )
+
+    # Calculate rider directions and effective wind
+    from core.calculations import calculate_rider_directions, calculate_effective_wind
+
+    rider_directions = calculate_rider_directions(df)
+    effective_wind = calculate_effective_wind(df, config)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 10))
+
+    # Plot the route
+    lat = df["latitude"].values
+    lon = df["longitude"].values
+
+    # Color the route based on effective wind
+    # Positive = headwind (red), Negative = tailwind (blue), Zero = crosswind (white)
+    norm = Normalize(vmin=-wind_speed, vmax=wind_speed)
+    cmap = plt.cm.coolwarm
+
+    # Plot the route with color gradient based on effective wind
+    for i in range(len(df) - 1):
+        ax.plot(
+            [lon[i], lon[i + 1]],
+            [lat[i], lat[i + 1]],
+            color=cmap(norm(effective_wind[i])),
+            linewidth=3,
+            alpha=0.8,
+            solid_capstyle="round",
+        )
+
+    # Add wind direction arrow in the corner
+    # Convert from meteorological (where wind comes FROM) to math convention (where wind goes TO)
+    wind_arrow_dir = (wind_direction + 180) % 360
+    wind_arrow_rad = np.radians(wind_arrow_dir)
+    arrow_length = 0.02  # Adjust based on your map scale
+
+    # Calculate arrow coordinates
+    arrow_x = 0.9  # Position in axes coordinates (0-1)
+    arrow_y = 0.1
+    dx = arrow_length * np.cos(wind_arrow_rad)
+    dy = arrow_length * np.sin(wind_arrow_rad)
+
+    # Convert to data coordinates for the arrow
+    arrow_box = ax.transAxes.transform(
+        [[arrow_x, arrow_y], [arrow_x + dx, arrow_y + dy]]
+    )
+    arrow_data_coords = ax.transData.inverted().transform(arrow_box)
+
+    # Draw the arrow
+    ax.annotate(
+        f"Wind\n{wind_speed} m/s",
+        xy=tuple(arrow_data_coords[0]),
+        xytext=tuple(arrow_data_coords[1]),
+        arrowprops=dict(
+            arrowstyle="->", linewidth=2, color="black", shrinkA=0, shrinkB=0
+        ),
+        ha="center",
+        va="center",
+        fontsize=12,
+        fontweight="bold",
+        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", alpha=0.8),
+    )
+
+    # Add colorbar
+    sm = ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, label="Effective Wind (m/s)", pad=0.02)
+    cbar.set_label("Effective Wind (m/s)", rotation=270, labelpad=20, fontsize=12)
+    cbar.ax.text(
+        0.5,
+        0.25,
+        "Tailwind",
+        transform=cbar.ax.transAxes,
+        ha="center",
+        va="center",
+        fontsize=10,
+        color="blue",
+        path_effects=[path_effects.withStroke(linewidth=3, foreground="white")],
+    )
+    cbar.ax.text(
+        0.5,
+        0.75,
+        "Headwind",
+        transform=cbar.ax.transAxes,
+        ha="center",
+        va="center",
+        fontsize=10,
+        color="red",
+        path_effects=[path_effects.withStroke(linewidth=3, foreground="white")],
+    )
+
+    # Add start/end markers
+    ax.scatter(lon[0], lat[0], color="green", s=100, label="Start", zorder=10)
+    ax.scatter(lon[-1], lat[-1], color="red", s=100, label="End", zorder=10)
+
+    # Add direction markers periodically
+    num_markers = 10  # Adjust based on route complexity
+    indices = np.linspace(0, len(df) - 1, num_markers, dtype=int)
+    for i in indices:
+        if i == 0 or i == len(df) - 1:
+            continue  # Skip start/end points
+
+        dir_rad = np.radians(rider_directions[i])
+        marker_length = 0.0005  # Adjust based on your map scale
+        ax.arrow(
+            lon[i],
+            lat[i],
+            marker_length * np.cos(dir_rad),
+            marker_length * np.sin(dir_rad),
+            head_width=marker_length / 2,
+            head_length=marker_length / 2,
+            fc="black",
+            ec="black",
+            alpha=0.7,
+            zorder=5,
+        )
+
+    # Set labels and title
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_title(f"Wind Effect Analysis: {wind_speed} m/s from {wind_direction}°")
+    ax.legend()
+
+    # Add general info
+    info_text = (
+        f"- Wind from: {wind_direction}° at {wind_speed} m/s\n"
+        f"- Route colored by effective wind\n"
+        f"- Red = Headwind, Blue = Tailwind\n"
+        f"- Black arrows show rider direction"
+    )
+    ax.text(
+        0.02,
+        0.02,
+        info_text,
+        transform=ax.transAxes,
+        fontsize=10,
+        verticalalignment="bottom",
+        horizontalalignment="left",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+    )
+
+    # Equal aspect ratio
+    ax.set_aspect("equal")
+
+    plt.tight_layout()
+    return fig

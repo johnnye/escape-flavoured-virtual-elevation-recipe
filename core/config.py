@@ -1,6 +1,4 @@
 class VirtualElevationConfig:
-    """Configuration parameters for virtual elevation calculations."""
-
     def __init__(
         self,
         rider_mass,
@@ -9,6 +7,7 @@ class VirtualElevationConfig:
         resample_freq="1s",
         drivetrain_efficiency=0.98,
         wind_velocity=0.0,
+        wind_direction=None,  # Added parameter: wind direction in degrees (0=North, 90=East)
         cda_bounds=(0.1, 0.5),
         crr_bounds=(0.001, 0.01),
         fixed_cda=None,
@@ -24,6 +23,7 @@ class VirtualElevationConfig:
         self.rho = air_density
         self.eta = drivetrain_efficiency
         self.vw = wind_velocity
+        self.wind_direction = wind_direction  # Store wind direction
         self.cda_bounds = cda_bounds
         self.crr_bounds = crr_bounds
         self.fixed_cda = fixed_cda

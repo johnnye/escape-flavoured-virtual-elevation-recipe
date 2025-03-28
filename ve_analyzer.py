@@ -1965,6 +1965,18 @@ def main():
         help="Enable interactive mode for data trimming and parameter fine-tuning",
     )
 
+    parser.add_argument(
+        "--wind-speed",
+        type=float,
+        default=0.0,
+        help="Wind speed in m/s (default: 0)",
+    )
+    parser.add_argument(
+        "--wind-direction",
+        type=float,
+        help="Wind direction in degrees (0=North, 90=East, 180=South, 270=West). If omitted, wind is treated as a constant",
+    )
+
     args = parser.parse_args()
 
     # Create configuration
@@ -1974,6 +1986,8 @@ def main():
         drivetrain_efficiency=args.eta,
         fixed_cda=args.cda,
         fixed_crr=args.crr,
+        wind_velocity=args.wind_speed,  # Use wind speed
+        wind_direction=args.wind_direction,  # Add wind direction
         resample_freq=args.resample,
     )
 
@@ -2087,30 +2101,32 @@ def main():
                 interactive_plot=args.interactive,
             )
 
-            if combined_result:
-                # Get the result directory based on filename
-                file_basename = os.path.basename(args.fit_file)
-                file_name, _ = os.path.splitext(file_basename)
-                result_dir = os.path.join(args.output, file_name)
-                os.makedirs(result_dir, exist_ok=True)
+            if combined_result is None:
+                print("\nSkipped selected laps analysis.")
+                return None  # Return from main function, preventing all-laps analysis
 
-                # Save combined lap data to CSV
-                combined_csv_path = os.path.join(result_dir, "combined_laps_data.csv")
-                combined_result["data"].to_csv(combined_csv_path, index=False)
+            # Get the result directory based on filename
+            file_basename = os.path.basename(args.fit_file)
+            file_name, _ = os.path.splitext(file_basename)
+            result_dir = os.path.join(args.output, file_name)
+            os.makedirs(result_dir, exist_ok=True)
 
-                print("\nCombined analysis complete!")
-                print(f"Combined data saved to: {combined_csv_path}")
-                print(f"CdA: {combined_result['cda']:.4f} m²")
-                print(f"Crr: {combined_result['crr']:.5f}")
+            # Save combined lap data to CSV
+            combined_csv_path = os.path.join(result_dir, "combined_laps_data.csv")
+            combined_result["data"].to_csv(combined_csv_path, index=False)
 
-                # Display the plot if it exists
-                if combined_result["fig"] is not None:
-                    plt.figure(combined_result["fig"].number)
-                    plt.show()
+            print("\nCombined analysis complete!")
+            print(f"Combined data saved to: {combined_csv_path}")
+            print(f"CdA: {combined_result['cda']:.4f} m²")
+            print(f"Crr: {combined_result['crr']:.5f}")
 
-                return combined_result
-            else:
-                print("\nCombined lap analysis failed.")
+            # Display the plot if it exists
+            if combined_result["fig"] is not None:
+                plt.figure(combined_result["fig"].number)
+                plt.show()
+
+            return combined_result
+
         except ValueError as e:
             print(f"Error parsing selected laps: {e}")
             print(
@@ -2196,6 +2212,182 @@ def main():
     else:
         print("\nAnalysis failed. Check the input .fit file.")
         return None, None
+
+
+def test_wind_direction_implementation(fit_file_path, wind_speed, wind_direction):
+    """
+    Test the wind direction implementation by comparing the results with and without
+    wind direction for a given .fit file.
+
+    Args:
+        fit_file_path (str): Path to the .fit file
+        wind_speed (float): Wind speed in m/s
+        wind_direction (float): Wind direction in degrees (0=North, 90=East)
+
+    Returns:
+        None (displays plots and prints results)
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+
+    from core.calculations import calculate_effective_wind, delta_ve
+    from core.config import VirtualElevationConfig
+    from data_io.fit_parser import parse_fit_file
+
+    # Parse the fit file
+    df, lap_messages = parse_fit_file(fit_file_path)
+
+    if df is None:
+        print("Failed to parse fit file")
+        return
+
+    # Create simple config for testing
+    config_constant_wind = VirtualElevationConfig(
+        rider_mass=75,
+        air_density=1.225,
+        wind_velocity=wind_speed,
+        wind_direction=None,  # No direction = constant wind
+    )
+
+    config_directional_wind = VirtualElevationConfig(
+        rider_mass=75,
+        air_density=1.225,
+        wind_velocity=wind_speed,
+        wind_direction=wind_direction,
+    )
+
+    # Calculate effective wind based on direction
+    effective_wind = calculate_effective_wind(df, config_directional_wind)
+
+    # Calculate acceleration if not present
+    if "a" not in df.columns:
+        from core.calculations import accel_calc
+
+        df["a"] = accel_calc(df["v"].values, config_constant_wind.dt)
+
+    # Use default parameters for testing
+    cda = 0.3
+    crr = 0.005
+
+    # Calculate virtual elevation for both methods
+    ve_changes_constant = delta_ve(config_constant_wind, cda=cda, crr=crr, df=df)
+
+    ve_changes_directional = delta_ve(config_directional_wind, cda=cda, crr=crr, df=df)
+
+    # Calculate virtual elevation profiles
+    from core.optimization import calculate_virtual_profile
+
+    actual_elevation = df["elevation"].values
+
+    virtual_profile_constant = calculate_virtual_profile(
+        ve_changes_constant, actual_elevation, None, df
+    )
+
+    virtual_profile_directional = calculate_virtual_profile(
+        ve_changes_directional, actual_elevation, None, df
+    )
+
+    # Calculate distance for x-axis
+    from core.calculations import calculate_distance
+
+    distance = calculate_distance(df)
+    distance_km = distance / 1000
+
+    # Create visualization
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 12), sharex=True)
+
+    # Plot elevation profiles
+    ax1.plot(distance_km, actual_elevation, "b-", label="Actual Elevation")
+    ax1.plot(
+        distance_km,
+        virtual_profile_constant,
+        "r-",
+        label="Virtual Elevation (Constant Wind)",
+    )
+    ax1.plot(
+        distance_km,
+        virtual_profile_directional,
+        "g-",
+        label="Virtual Elevation (Directional Wind)",
+    )
+    ax1.set_ylabel("Elevation (m)")
+    ax1.set_title(f"Elevation Profiles: Wind {wind_speed} m/s from {wind_direction}°")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Plot effective wind
+    ax2.plot(
+        distance_km, np.full_like(distance_km, wind_speed), "r-", label="Constant Wind"
+    )
+    ax2.plot(distance_km, effective_wind, "g-", label="Directional Wind")
+    ax2.axhline(y=0, color="k", linestyle="--", alpha=0.5)
+    ax2.set_ylabel("Wind Speed (m/s)")
+    ax2.set_title("Wind Effect (Positive = Headwind, Negative = Tailwind)")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    # Plot difference between profiles
+    profile_diff = virtual_profile_directional - virtual_profile_constant
+    ax3.plot(distance_km, profile_diff, "k-", label="Directional - Constant")
+    ax3.axhline(y=0, color="r", linestyle="--", alpha=0.5)
+    ax3.set_xlabel("Distance (km)")
+    ax3.set_ylabel("Elevation Diff (m)")
+    ax3.set_title("Difference in Virtual Elevation Profiles")
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    # Calculate statistics
+    rmse_constant = np.sqrt(np.mean((virtual_profile_constant - actual_elevation) ** 2))
+    rmse_directional = np.sqrt(
+        np.mean((virtual_profile_directional - actual_elevation) ** 2)
+    )
+
+    from scipy.stats import pearsonr
+
+    r2_constant = pearsonr(virtual_profile_constant, actual_elevation)[0] ** 2
+    r2_directional = pearsonr(virtual_profile_directional, actual_elevation)[0] ** 2
+
+    # Print results
+    print("Comparison of Wind Models:")
+    print(f"Wind Speed: {wind_speed} m/s, Direction: {wind_direction}°")
+    print("\nConstant Wind Model:")
+    print(f"  RMSE: {rmse_constant:.2f} m")
+    print(f"  R²: {r2_constant:.4f}")
+    print("\nDirectional Wind Model:")
+    print(f"  RMSE: {rmse_directional:.2f} m")
+    print(f"  R²: {r2_directional:.4f}")
+    print("\nImprovement:")
+    print(
+        f"  RMSE Change: {rmse_constant - rmse_directional:.2f} m ({100*(rmse_constant - rmse_directional)/rmse_constant:.1f}%)"
+    )
+    print(
+        f"  R² Change: {r2_directional - r2_constant:.4f} ({100*(r2_directional - r2_constant)/r2_constant:.1f}%)"
+    )
+
+    # Also create a visualization of the route with wind direction
+    try:
+        from core.visualization import visualize_wind_effect
+
+        fig2 = visualize_wind_effect(df, wind_speed, wind_direction)
+        plt.figure(fig2.number)
+        plt.tight_layout()
+    except Exception as e:
+        print(f"Could not create wind visualization: {e}")
+
+    plt.show()
+
+    return {
+        "rmse_constant": rmse_constant,
+        "rmse_directional": rmse_directional,
+        "r2_constant": r2_constant,
+        "r2_directional": r2_directional,
+        "effective_wind": effective_wind,
+        "virtual_profile_constant": virtual_profile_constant,
+        "virtual_profile_directional": virtual_profile_directional,
+    }
 
 
 if __name__ == "__main__":
