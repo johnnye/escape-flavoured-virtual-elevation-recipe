@@ -1125,16 +1125,12 @@ class VirtualElevationPlot:
 
         # Set CDA and CRR ranges if not provided
         if cda_range is None:
-            cda_min = max(0.05, initial_cda * 0.5)
-            cda_max = min(0.8, initial_cda * 1.5)
-            self.cda_range = (cda_min, cda_max)
+            self.cda_range = (0.15, 0.5)
         else:
             self.cda_range = cda_range
 
         if crr_range is None:
-            crr_min = max(0.0005, initial_crr * 0.5)
-            crr_max = min(0.02, initial_crr * 1.5)
-            self.crr_range = (crr_min, crr_max)
+            self.crr_range = (0.001, 0.03)
         else:
             self.crr_range = crr_range
 

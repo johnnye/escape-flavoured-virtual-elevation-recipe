@@ -1797,18 +1797,9 @@ def show_interactive_plot(
             "Rider mass (kg) and air density (rho) are required parameters"
         )
 
-    # Set default ranges if not provided
-    if cda_range is None:
-        # Set range to ±50% of optimized value, but within reasonable bounds
-        cda_min = max(0.05, optimized_cda * 0.5)
-        cda_max = min(0.8, optimized_cda * 1.5)
-        cda_range = (cda_min, cda_max)
-
-    if crr_range is None:
-        # Set range to ±50% of optimized value, but within reasonable bounds
-        crr_min = max(0.0005, optimized_crr * 0.5)
-        crr_max = min(0.02, optimized_crr * 1.5)
-        crr_range = (crr_min, crr_max)
+    # Get slider ranges from config bounds
+    cda_range = config.cda_bounds if config is not None else (0.15, 0.5)
+    crr_range = config.crr_bounds if config is not None else (0.001, 0.03)
 
     print(f"\nShowing interactive plot with initial parameters:")
     print(
@@ -1936,14 +1927,14 @@ def main():
     parser.add_argument(
         "--cda-bounds",
         type=str,
-        default="0.1,0.5",
-        help="Bounds for CdA optimization as min,max (default: '0.1,0.5')",
+        default="0.15,0.5",  # Changed from "0.1,0.5"
+        help="Bounds for CdA optimization as min,max (default: '0.15,0.5')",  # Updated help text
     )
     parser.add_argument(
         "--crr-bounds",
         type=str,
-        default="0.001,0.01",
-        help="Bounds for Crr optimization as min,max (default: '0.001,0.01')",
+        default="0.001,0.03",  # Changed from "0.001,0.01"
+        help="Bounds for Crr optimization as min,max (default: '0.001,0.03')",  # Updated help text
     )
     parser.add_argument(
         "--optimize-elevation-gain",

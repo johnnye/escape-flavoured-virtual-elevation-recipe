@@ -8,8 +8,8 @@ class VirtualElevationConfig:
         drivetrain_efficiency=0.98,
         wind_velocity=0.0,
         wind_direction=None,  # Added parameter: wind direction in degrees (0=North, 90=East)
-        cda_bounds=(0.1, 0.5),
-        crr_bounds=(0.001, 0.01),
+        cda_bounds=(0.15, 0.5),  # Changed from (0.1, 0.5)
+        crr_bounds=(0.001, 0.03),  # Changed from (0.001, 0.01)
         fixed_cda=None,
         fixed_crr=None,
     ):
