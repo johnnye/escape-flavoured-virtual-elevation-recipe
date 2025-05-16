@@ -22,7 +22,28 @@ block_cipher = None
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-SPEC_DIR = Path.cwd()  # Use current working directory directly
+
+# Directly find the repo root folder that contains main.py
+import os
+REPO_ROOT = None
+
+# Start from the current directory and check if main.py exists
+if os.path.exists("main.py"):
+    SPEC_DIR = Path.cwd()
+# If not, try one level up  
+elif os.path.exists("../main.py"):
+    SPEC_DIR = Path.cwd().parent
+# If neither works, try with absolute paths from working directory
+else:
+    # Try to find main.py in the current directory structure
+    for root, dirs, files in os.walk(Path.cwd()):
+        if "main.py" in files:
+            SPEC_DIR = Path(root)
+            break
+    else:
+        # If we still can't find it, raise the error
+        raise SystemExit(f"❌ main.py not found in or below {Path.cwd()}")
+
 ENTRY_SCRIPT = SPEC_DIR / "main.py"
 if not ENTRY_SCRIPT.exists():
     raise SystemExit(f"❌ main.py not found at {ENTRY_SCRIPT}")
