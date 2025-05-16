@@ -1,6 +1,15 @@
 # GitHub Actions workflow: build.yaml
-# Builds standalone, double-clickable VirtualElevation binaries on Windows, macOS and Linux.
-# Push to main, any PR, or a tag like v1.2.3 to trigger a release build.
+# Builds standalone VirtualElevation binaries on Windows, macOS and Linux.
+# NOTE: When you feed PyInstaller an explicit .spec file you **cannot** also pass
+# --onefile / --windowed on the CLI. Those modes must be encoded inside the
+# spec, or (simpler) you just omit the flags. PyInstaller will honour whatever
+# settings are already baked into `ve.spec` (console=False gives you “windowed”).
+#
+# This workflow therefore calls `pyinstaller ve.spec --clean --noconfirm` and
+# leaves the `onefile` discussion to the spec (currently it builds an *onedir*
+# bundle per platform – which still gives a double‑clickable `.app` on macOS
+# and an `.exe` inside its own folder on Windows). If you really *need* the
+# single‑file exe, drop the spec and build via CLI flags instead.
 
 name: Build VE desktop apps
 
@@ -37,17 +46,16 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller==6.4.*
 
-      - name: Build standalone executable with PyInstaller
+      - name: Build standalone executable (uses ve.spec)
         run: |
-          # One spec to rule them all – --onefile and --windowed for a clean UX
-          pyinstaller ve.spec --onefile --windowed --noconfirm
+          pyinstaller ve.spec --clean --noconfirm
 
       # macOS – wrap the .app inside a .dmg (Gatekeeper-friendly)
       - name: Create dmg (macOS only)
         if: runner.os == 'macOS'
         run: |
           brew install create-dmg || true
-          create-dmg --overwrite --volname "VirtualElevation" dist/*.app
+          create-dmg --overwrite --volname "VirtualElevationRecipes" dist/*.app
 
       # Linux – convert the output folder to an AppImage
       - name: Package AppImage (Linux only)
@@ -56,24 +64,24 @@ jobs:
           sudo apt-get update && sudo apt-get install -y libfuse2
           wget -q https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage -O appimagetool
           chmod +x appimagetool
-          ./appimagetool dist/VirtualElevation dist/VirtualElevation.AppImage
+          ./appimagetool dist/VirtualElevationRecipes dist/VirtualElevationRecipes.AppImage
 
-      # Zip artefacts for upload
+      # Zip artefacts for upload – grab the entire built directory or dmg/AppImage
       - name: Archive artefacts
         shell: bash
         run: |
           cd dist
           case "${{ runner.os }}" in
-            Windows) 7z a ../VirtualElevation-${{ runner.os }}.zip *.exe ;;    # one-file .exe
-            macOS)   zip -r ../VirtualElevation-${{ runner.os }}.zip *.app *.dmg ;;
-            Linux)   zip -r ../VirtualElevation-${{ runner.os }}.zip VirtualElevation*.AppImage VirtualElevation* ;;  # include AppImage & fallback folder
+            Windows) zip -r ../VirtualElevationRecipes-${{ runner.os }}.zip VirtualElevationRecipes ;;
+            macOS)   zip -r ../VirtualElevationRecipes-${{ runner.os }}.zip *.app *.dmg ;;
+            Linux)   zip -r ../VirtualElevationRecipes-${{ runner.os }}.zip VirtualElevationRecipes*.AppImage VirtualElevationRecipes ;;  # include AppImage & fallback folder
           esac
 
       - name: Upload build artefact
         uses: actions/upload-artifact@v4
         with:
-          name: VirtualElevation-${{ runner.os }}
-          path: VirtualElevation-${{ runner.os }}.zip
+          name: VirtualElevationRecipes-${{ runner.os }}
+          path: VirtualElevationRecipes-${{ runner.os }}.zip
           if-no-files-found: error
 
   release:
@@ -88,7 +96,7 @@ jobs:
       - name: Download artefacts
         uses: actions/download-artifact@v4
         with:
-          pattern: VirtualElevation-*
+          pattern: VirtualElevationRecipes-*
           path: ./dist
 
       - name: Generate release notes & publish
