@@ -1,22 +1,13 @@
-# GitHub Actions workflow: build.yaml
-# Builds standalone VirtualElevation binaries on Windows, macOS and Linux.
-# NOTE: When you feed PyInstaller an explicit .spec file you **cannot** also pass
-# --onefile / --windowed on the CLI. Those modes must be encoded inside the
-# spec, or (simpler) you just omit the flags. PyInstaller will honour whatever
-# settings are already baked into `ve.spec` (console=False gives you “windowed”).
-#
-# This workflow therefore calls `pyinstaller ve.spec --clean --noconfirm` and
-# leaves the `onefile` discussion to the spec (currently it builds an *onedir*
-# bundle per platform – which still gives a double‑clickable `.app` on macOS
-# and an `.exe` inside its own folder on Windows). If you really *need* the
-# single‑file exe, drop the spec and build via CLI flags instead.
+# .github/workflows/build.yaml
+# CI pipeline: builds VirtualElevationRecipes binaries on Windows, macOS and Linux
+# and attaches them to the run or to a tagged GitHub Release.
 
-name: Build VE desktop apps
+name: Build VirtualElevationRecipes desktop apps
 
 on:
   push:
     branches: [main]
-    tags: ["v*.*.*"]
+    tags: ["v*.*.*"]      # e.g. v1.3.0 triggers a release build
   pull_request:
   workflow_dispatch:
 
@@ -31,7 +22,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
@@ -40,24 +31,24 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
-      - name: Install runtime requirements + PyInstaller
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller==6.4.*
+          pip install pyinstaller==6.4.* tomlkit==0.12.*
 
-      - name: Build standalone executable (uses ve.spec)
+      - name: Build application using ve.spec
         run: |
           pyinstaller ve.spec --clean --noconfirm
 
-      # macOS – wrap the .app inside a .dmg (Gatekeeper-friendly)
+      # macOS – wrap the .app inside a .dmg so Gatekeeper won’t complain
       - name: Create dmg (macOS only)
         if: runner.os == 'macOS'
         run: |
           brew install create-dmg || true
           create-dmg --overwrite --volname "VirtualElevationRecipes" dist/*.app
 
-      # Linux – convert the output folder to an AppImage
+      # Linux – convert onedir bundle to an AppImage for easy distribution
       - name: Package AppImage (Linux only)
         if: runner.os == 'Linux'
         run: |
@@ -66,7 +57,7 @@ jobs:
           chmod +x appimagetool
           ./appimagetool dist/VirtualElevationRecipes dist/VirtualElevationRecipes.AppImage
 
-      # Zip artefacts for upload – grab the entire built directory or dmg/AppImage
+      # Zip artefacts per platform
       - name: Archive artefacts
         shell: bash
         run: |
@@ -74,7 +65,7 @@ jobs:
           case "${{ runner.os }}" in
             Windows) zip -r ../VirtualElevationRecipes-${{ runner.os }}.zip VirtualElevationRecipes ;;
             macOS)   zip -r ../VirtualElevationRecipes-${{ runner.os }}.zip *.app *.dmg ;;
-            Linux)   zip -r ../VirtualElevationRecipes-${{ runner.os }}.zip VirtualElevationRecipes*.AppImage VirtualElevationRecipes ;;  # include AppImage & fallback folder
+            Linux)   zip -r ../VirtualElevationRecipes-${{ runner.os }}.zip VirtualElevationRecipes*.AppImage VirtualElevationRecipes ;;
           esac
 
       - name: Upload build artefact
@@ -99,16 +90,15 @@ jobs:
           pattern: VirtualElevationRecipes-*
           path: ./dist
 
-      - name: Generate release notes & publish
-        id: release
+      - name: Generate release and upload binaries
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
 
-      - name: Upload binaries to release
+      - name: Upload zips to release
         run: |
           for file in dist/**/*.zip; do
-            gh release upload "$GITHUB_REF_NAME" "$file" --clobber;
+            gh release upload "$GITHUB_REF_NAME" "$file" --clobber
           done
         env:
           GH_TOKEN: ${{ github.token }}

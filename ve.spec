@@ -1,17 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
-PyInstaller spec file for the VirtualElevation desktop application
-=================================================================
-A *single* spec that works on Windows, macOS and Linux.
-Usage (run on each OS):
+"""ve.spec – PyInstaller build recipe for **VirtualElevationRecipes**
 
-    pyinstaller ve.spec --onefile --windowed --noconfirm
+Invoked by the GitHub Actions workflow with:
 
-The GitHub Actions workflow (build.yaml) already runs this command.
+    pyinstaller ve.spec --clean --noconfirm
 
-Things to tweak if you add new resources:
-  • DATA_FOLDERS – any folder that must ship with the binary
-  • hiddenimports – add modules PyInstaller can’t detect automatically
+Produces an **onedir** bundle named `VirtualElevationRecipes` on each OS.
+The workflow post‑processes it into a dmg (macOS) or AppImage (Linux) and
+zips it for all platforms.  Adjust DATA_FOLDERS if you add new resource
+sub‑directories.
 """
 
 import sys
@@ -21,28 +18,33 @@ from PyInstaller.utils.hooks import collect_submodules
 block_cipher = None
 APP_NAME = "VirtualElevationRecipes"
 
-# -----------------------------------------------------------------------------
-# Data files – entire folders get bundled as‑is under the same relative path
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Resolve spec location – PyInstaller 6 sets _specfile; fall back to CWD.
+# ---------------------------------------------------------------------------
+SPEC_DIR = Path(globals().get("_specfile", Path.cwd())).parent
+
+# ---------------------------------------------------------------------------
+# Data files – bundle these folders verbatim alongside the executable.
+# ---------------------------------------------------------------------------
 DATA_FOLDERS = ["ui", "models", "utils", "config"]
 
-datas = [(folder, folder) for folder in DATA_FOLDERS]
+datas = [(str(SPEC_DIR / folder), folder) for folder in DATA_FOLDERS]
 
-# Ship all three icon variants; the platform‑specific one is selected below
+# Icons: supply all three formats so each OS picks its native one.
 for icon in ("VE_icon.png", "VE_icon.ico", "VE_icon.icns"):
-    datas.append((icon, "."))
+    datas.append((str(SPEC_DIR / icon), "."))
 
-# -----------------------------------------------------------------------------
-# Hidden imports – Qt plugins & anything PyInstaller misses
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Hidden imports – Qt plugins and anything PyInstaller misses.
+# ---------------------------------------------------------------------------
 hiddenimports = collect_submodules("PySide6")
 
-# -----------------------------------------------------------------------------
-# Analysis – entry point is main.py in the project root
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Analysis – specify entry‑point and resources.
+# ---------------------------------------------------------------------------
 a = Analysis(
-    ["main.py"],
-    pathex=[str(Path(__file__).parent)],
+    [str(SPEC_DIR / "main.py")],
+    pathex=[str(SPEC_DIR)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -56,16 +58,14 @@ a = Analysis(
     noarchive=False,
 )
 
-# Zip the pure‑Python bytecode
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# Pick the right icon for the current build platform
+# Choose icon for current platform
 icon_file = {
     "win32": "VE_icon.ico",
     "darwin": "VE_icon.icns",
 }.get(sys.platform, "VE_icon.png")
 
-# Build the executable (one‑file is toggled via the CLI flag)
 exe = EXE(
     pyz,
     a.scripts,
@@ -76,11 +76,10 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,      # --windowed flag hides the console on Windows
+    console=False,  # GUI app – hide console window
     icon=icon_file,
 )
 
-# Collect everything into the final dist/VirtualElevation (or .exe, .app, etc.)
 coll = COLLECT(
     exe,
     a.binaries,
