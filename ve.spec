@@ -22,7 +22,7 @@ block_cipher = None
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-SPEC_DIR = Path(globals().get("_specfile", Path.cwd())).parent
+SPEC_DIR = Path.cwd()  # Use current working directory directly
 ENTRY_SCRIPT = SPEC_DIR / "main.py"
 if not ENTRY_SCRIPT.exists():
     raise SystemExit(f"❌ main.py not found at {ENTRY_SCRIPT}")

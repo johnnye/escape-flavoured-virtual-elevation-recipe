@@ -45,6 +45,12 @@ jobs:
 
       - name: Build application using ve.spec
         run: |
+          # Add debugging
+          echo "PWD: $(pwd)"
+          python -c "import os, sys; print(f'CWD Python: {os.getcwd()}')"
+          # Try without parent
+          sed -i 's/SPEC_DIR = Path(globals().get("_specfile", Path.cwd())).parent/SPEC_DIR = Path(globals().get("_specfile", Path.cwd()))/' ve.spec
+          # Now build
           pyinstaller ve.spec --clean --noconfirm
 
       # ------------------------------ macOS dmg -----------------------------
