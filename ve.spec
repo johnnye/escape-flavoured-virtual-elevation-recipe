@@ -1,64 +1,68 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""ve.spec – PyInstaller recipe for **VirtualElevationRecipes**
+"""
+ve.spec – PyInstaller recipe for *VirtualElevationRecipes*
 
-Assumptions about repo layout (root = directory containing this spec):
+It tries these two entry-point candidates in order:
+  1) <repo root>/main.py
+  2) <repo root>/escape-flavoured-virtual-elevation-recipe/main.py
 
-    ├── ve.spec
-    ├── main.py               # application entry point
-    ├── VE_icon.png|ico|icns   # icons (at least one)
-    ├── ui/
-    ├── models/
-    ├── utils/
-    └── config/
-
-If any of those folders are missing, just remove them from DATA_FOLDERS.
-Invocation (CI or local):
-
-    pyinstaller ve.spec --clean --noconfirm
-
-This builds an **onedir** bundle named `VirtualElevationRecipes` in ./dist.
-The CI workflow then post‑processes it (zip, dmg, AppImage).
+Adjust ENTRY_CANDIDATES if your structure changes.
+Run with:  pyinstaller ve.spec --clean --noconfirm
 """
 
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
-block_cipher = None
 APP_NAME = "VirtualElevationRecipes"
+block_cipher = None
 
-# Root of the repository – directory where ve.spec resides
+# ---------------------------------------------------------------------------
+# Where are we?
+# ---------------------------------------------------------------------------
 SPEC_DIR = Path(globals().get("_specfile", Path.cwd())).parent
 
-# Entry script
-ENTRY_SCRIPT = SPEC_DIR / "main.py"
-if not ENTRY_SCRIPT.exists():
-    raise SystemExit(f"Entry script not found: {ENTRY_SCRIPT}")
+# Possible locations of the real start-up script
+ENTRY_CANDIDATES = [
+    SPEC_DIR / "main.py",
+    SPEC_DIR / "escape-flavoured-virtual-elevation-recipe" / "main.py",
+]
 
-# Resource folders to copy verbatim (skip if they don’t exist)
+for candidate in ENTRY_CANDIDATES:
+    if candidate.exists():
+        ENTRY_SCRIPT = candidate
+        SRC_ROOT = candidate.parent            # use this for data folders
+        break
+else:
+    raise SystemExit(
+        "❌  Could not find main.py in any of the expected locations:\n"
+        + "\n".join([str(p) for p in ENTRY_CANDIDATES])
+    )
+
+# ---------------------------------------------------------------------------
+# Resources – copy only what exists
+# ---------------------------------------------------------------------------
 DATA_FOLDERS = ["ui", "models", "utils", "config"]
+datas = [
+    (str(SRC_ROOT / f), f) for f in DATA_FOLDERS if (SRC_ROOT / f).exists()
+]
 
-datas = []
-for folder in DATA_FOLDERS:
-    src = SPEC_DIR / folder
-    if src.exists():
-        datas.append((str(src), folder))
-
-# Icons – add whichever variants actually exist
 for icon in ("VE_icon.png", "VE_icon.ico", "VE_icon.icns"):
     p = SPEC_DIR / icon
     if p.exists():
         datas.append((str(p), "."))
 
-# Hidden imports – Qt plugins & modules PyInstaller may miss
+# ---------------------------------------------------------------------------
+# Hidden imports – Qt plugins & dynamic modules
+# ---------------------------------------------------------------------------
 hiddenimports = collect_submodules("PySide6")
 
-# Analysis: instruct PyInstaller where to start
-pathex = [str(SPEC_DIR)]
-
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
 a = Analysis(
     [str(ENTRY_SCRIPT)],
-    pathex=pathex,
+    pathex=[str(SPEC_DIR), str(SRC_ROOT)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -74,14 +78,10 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# Choose platform‑native icon if we bundled one
-icon_map = {
+icon_file = {
     "win32": "VE_icon.ico",
     "darwin": "VE_icon.icns",
-}
-icon_file = next((i for k, i in icon_map.items() if sys.platform == k and (SPEC_DIR / i).exists()), None)
-if icon_file is None and (SPEC_DIR / "VE_icon.png").exists():
-    icon_file = "VE_icon.png"
+}.get(sys.platform, "VE_icon.png") if (SPEC_DIR / "VE_icon.png").exists() else None
 
 exe = EXE(
     pyz,
