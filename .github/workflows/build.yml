@@ -44,13 +44,10 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          # PyInstaller drops .app inside an onedir bundle: dist/VirtualElevationRecipes/VirtualElevationRecipes.app
-          APP_PATH=$(ls -d dist/VirtualElevationRecipes*.app 2>/dev/null || true)
-          if [[ -z "$APP_PATH" ]]; then APP_PATH=$(ls -d dist/VirtualElevationRecipes/*.app); fi
-          echo "APP_PATH=$APP_PATH"
+          APP_PATH="dist/VirtualElevationRecipes.app"
           DMG_NAME="VirtualElevationRecipes.dmg"
-          hdiutil create "$DMG_NAME" -volname "VirtualElevationRecipes" -srcfolder "$APP_PATH" -ov -format UDZO
-
+          hdiutil create "$DMG_NAME" -volname "VirtualElevationRecipes" \
+                                    -srcfolder "$APP_PATH" -ov -format UDZO
       # ------------------------------ Linux AppImage ------------------------
       - name: Package AppImage (Linux only)
         if: runner.os == 'Linux'

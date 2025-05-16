@@ -1,13 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
-ve.spec – PyInstaller recipe for *VirtualElevationRecipes*
+"""ve.spec – PyInstaller recipe for *VirtualElevationRecipes*
 
-It tries these two entry-point candidates in order:
-  1) <repo root>/main.py
-  2) <repo root>/escape-flavoured-virtual-elevation-recipe/main.py
+* Builds an **onedir** bundle on Windows & Linux.
+* On **macOS** it additionally wraps the executable in a native `.app` bundle
+  via the `BUNDLE` command so the workflow can create a DMG.
+* Assumes the repo root contains `main.py`, `VE_icon.(png|icns|ico)`, and any
+  optional resource folders (`ui/`, `models/`, `utils/`, `config/`).
 
-Adjust ENTRY_CANDIDATES if your structure changes.
-Run with:  pyinstaller ve.spec --clean --noconfirm
+Run with:
+
+    pyinstaller ve.spec --clean --noconfirm
 """
 
 import sys
@@ -18,33 +20,20 @@ APP_NAME = "VirtualElevationRecipes"
 block_cipher = None
 
 # ---------------------------------------------------------------------------
-# Where are we?
+# Paths
 # ---------------------------------------------------------------------------
 SPEC_DIR = Path(globals().get("_specfile", Path.cwd())).parent
-
-# Possible locations of the real start-up script
-ENTRY_CANDIDATES = [
-    SPEC_DIR / "main.py",
-    SPEC_DIR / "escape-flavoured-virtual-elevation-recipe" / "main.py",
-]
-
-for candidate in ENTRY_CANDIDATES:
-    if candidate.exists():
-        ENTRY_SCRIPT = candidate
-        SRC_ROOT = candidate.parent            # use this for data folders
-        break
-else:
-    raise SystemExit(
-        "❌  Could not find main.py in any of the expected locations:\n"
-        + "\n".join([str(p) for p in ENTRY_CANDIDATES])
-    )
+ENTRY_SCRIPT = SPEC_DIR / "main.py"
+if not ENTRY_SCRIPT.exists():
+    raise SystemExit(f"❌ main.py not found at {ENTRY_SCRIPT}")
 
 # ---------------------------------------------------------------------------
-# Resources – copy only what exists
+# Datas – copy only if they exist
 # ---------------------------------------------------------------------------
 DATA_FOLDERS = ["ui", "models", "utils", "config"]
+
 datas = [
-    (str(SRC_ROOT / f), f) for f in DATA_FOLDERS if (SRC_ROOT / f).exists()
+    (str(SPEC_DIR / f), f) for f in DATA_FOLDERS if (SPEC_DIR / f).exists()
 ]
 
 for icon in ("VE_icon.png", "VE_icon.ico", "VE_icon.icns"):
@@ -52,17 +41,15 @@ for icon in ("VE_icon.png", "VE_icon.ico", "VE_icon.icns"):
     if p.exists():
         datas.append((str(p), "."))
 
-# ---------------------------------------------------------------------------
-# Hidden imports – Qt plugins & dynamic modules
-# ---------------------------------------------------------------------------
 hiddenimports = collect_submodules("PySide6")
 
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
+
 a = Analysis(
     [str(ENTRY_SCRIPT)],
-    pathex=[str(SPEC_DIR), str(SRC_ROOT)],
+    pathex=[str(SPEC_DIR)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -78,10 +65,17 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-icon_file = {
+# Choose appropriate icon for the platform if available
+icon_map = {
     "win32": "VE_icon.ico",
     "darwin": "VE_icon.icns",
-}.get(sys.platform, "VE_icon.png") if (SPEC_DIR / "VE_icon.png").exists() else None
+}
+icon_file = None
+mapped = icon_map.get(sys.platform)
+if mapped and (SPEC_DIR / mapped).exists():
+    icon_file = mapped
+elif (SPEC_DIR / "VE_icon.png").exists():
+    icon_file = "VE_icon.png"
 
 exe = EXE(
     pyz,
@@ -97,8 +91,19 @@ exe = EXE(
     icon=icon_file,
 )
 
+# macOS: wrap executable into .app bundle
+if sys.platform == "darwin":
+    target = BUNDLE(
+        exe,
+        name=f"{APP_NAME}.app",
+        icon=icon_file,
+        bundle_identifier="com.example.virtualelevationrecipes",
+    )
+else:
+    target = exe
+
 coll = COLLECT(
-    exe,
+    target,
     a.binaries,
     a.zipfiles,
     a.datas,
