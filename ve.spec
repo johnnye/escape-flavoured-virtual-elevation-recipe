@@ -112,24 +112,26 @@ exe = EXE(
     icon=icon_file,
 )
 
-# macOS: wrap executable into .app bundle
 if sys.platform == "darwin":
-    target = BUNDLE(
+    # For macOS, create a BUNDLE without passing to COLLECT
+    coll = BUNDLE(
         exe,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
         name=f"{APP_NAME}.app",
         icon=icon_file,
         bundle_identifier="com.example.virtualelevationrecipes",
     )
 else:
-    target = exe
-
-coll = COLLECT(
-    target,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name=APP_NAME,
-)
+    # For Windows/Linux, use COLLECT with exe
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        name=APP_NAME,
+    )
