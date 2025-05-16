@@ -1,0 +1,293 @@
+import numpy as np
+import pandas as pd
+from fitparse import FitFile as FitParser
+
+
+class FitFile:
+    def __init__(self, filename):
+        """Load and parse a FIT file"""
+        self.filename = filename
+        self.fit_parser = FitParser(filename)
+
+        # Extract data
+        self.laps = []
+        self.location = []
+        self.speed = []
+        self.power = []
+        self.timestamps = []
+
+        self.parse_data()
+        self.resample_data()
+
+    def parse_data(self):
+        """Parse data from FIT file"""
+        # Temporary storage for records
+        records = []
+        lap_records = []
+
+        # Process lap messages
+        for message in self.fit_parser.get_messages("lap"):
+            lap_data = {}
+            for data in message:
+                # Include enhanced_avg_speed in data collection
+                if data.name in [
+                    "start_time",
+                    "timestamp",
+                    "total_elapsed_time",
+                    "total_distance",
+                    "avg_power",
+                    "avg_speed",
+                    "enhanced_avg_speed",  # Added enhanced_avg_speed
+                    "max_speed",
+                    "enhanced_max_speed",  # Added enhanced_max_speed
+                    "start_position_lat",
+                    "start_position_long",
+                ]:
+                    lap_data[data.name] = data.value
+
+            # Prefer enhanced values over non-enhanced ones
+            if "enhanced_avg_speed" in lap_data:
+                lap_data["avg_speed"] = lap_data["enhanced_avg_speed"]
+
+            if "enhanced_max_speed" in lap_data:
+                lap_data["max_speed"] = lap_data["enhanced_max_speed"]
+
+            if (
+                "start_time" in lap_data
+                and "timestamp" in lap_data
+                and "total_elapsed_time" in lap_data
+            ):
+                # In FIT files, 'timestamp' is actually the end time of the lap
+                lap_data["end_time"] = lap_data["timestamp"]
+
+                # Verify times make sense
+                if lap_data["end_time"] < lap_data["start_time"]:
+                    # Calculate a reasonable end time
+                    if (
+                        "total_elapsed_time" in lap_data
+                        and lap_data["total_elapsed_time"] > 0
+                    ):
+                        lap_data["end_time"] = lap_data["start_time"] + pd.Timedelta(
+                            seconds=lap_data["total_elapsed_time"]
+                        )
+
+                # Convert start position from semicircles to degrees if available
+                if (
+                    "start_position_lat" in lap_data
+                    and "start_position_long" in lap_data
+                ):
+                    if (
+                        lap_data["start_position_lat"] is not None
+                        and lap_data["start_position_long"] is not None
+                    ):
+                        if isinstance(
+                            lap_data["start_position_lat"], (int, np.int32, np.int64)
+                        ):
+                            lap_data["start_position_lat"] = lap_data[
+                                "start_position_lat"
+                            ] * (180 / 2**31)
+                            lap_data["start_position_long"] = lap_data[
+                                "start_position_long"
+                            ] * (180 / 2**31)
+            lap_records.append(lap_data)
+
+        # Process record messages
+        for message in self.fit_parser.get_messages("record"):
+            record_data = {}
+            for data in message:
+                if data.name in [
+                    "timestamp",
+                    "distance",
+                    "position_lat",
+                    "position_long",
+                    "speed",
+                    "enhanced_speed",  # Added enhanced_speed
+                    "power",
+                    "altitude",
+                    "enhanced_altitude",  # Added enhanced_altitude
+                ]:
+                    record_data[data.name] = data.value
+
+            # Prefer enhanced values over non-enhanced ones
+            if "enhanced_speed" in record_data:
+                record_data["speed"] = record_data["enhanced_speed"]
+
+            if "enhanced_altitude" in record_data:
+                record_data["altitude"] = record_data["enhanced_altitude"]
+
+            if "timestamp" in record_data:
+                records.append(record_data)
+
+        # Convert to pandas dataframes
+        self.records_df = pd.DataFrame(records)
+        # drop any row from records_df that has a NaN value in timestamp, speed, or power columns
+        self.records_df.dropna(subset=["timestamp", "speed", "power"], inplace=True)
+        self.laps_df = pd.DataFrame(lap_records)
+
+        # Check if we have required data
+        if len(self.records_df) == 0:
+            raise ValueError("No record data found in FIT file")
+
+        if (
+            "position_lat" not in self.records_df.columns
+            or "position_long" not in self.records_df.columns
+        ):
+            self.has_gps = False
+        else:
+            self.has_gps = True
+            # Convert semicircles to degrees for lat/long
+            if self.records_df["position_lat"].dtype in [
+                np.int32,
+                np.int64,
+                np.float64,
+            ]:
+                self.records_df["position_lat"] = self.records_df["position_lat"] * (
+                    180 / 2**31
+                )
+                self.records_df["position_long"] = self.records_df["position_long"] * (
+                    180 / 2**31
+                )
+
+    def resample_data(self):
+        """Resample data to 1s intervals"""
+        if "timestamp" not in self.records_df.columns:
+            raise ValueError("No timestamp data found in FIT file")
+
+        # Set timestamp as index
+        self.records_df.set_index("timestamp", inplace=True)
+
+        # Resample to 1s intervals (use 's' instead of 'S' to avoid FutureWarning)
+        self.resampled_df = self.records_df.resample("1s").interpolate(method="linear")
+
+        # Reset index to have timestamp as a column
+        self.resampled_df.reset_index(inplace=True)
+
+    def get_lap_data(self):
+        """Return processed lap data with calculated fields"""
+        lap_data = []
+
+        for i, lap in self.laps_df.iterrows():
+            start_time = lap["start_time"]
+
+            # Use 'end_time' if available, otherwise fallback to 'timestamp'
+            if "end_time" in lap:
+                end_time = lap["end_time"]
+            else:
+                # Calculate end time from start time and duration
+                if "total_elapsed_time" in lap and lap["total_elapsed_time"] > 0:
+                    end_time = start_time + pd.Timedelta(
+                        seconds=lap["total_elapsed_time"]
+                    )
+                else:
+                    end_time = lap["timestamp"]  # Fallback to timestamp
+
+            # Ensure end time is after start time
+            if (
+                end_time <= start_time
+                and "total_elapsed_time" in lap
+                and lap["total_elapsed_time"] > 0
+            ):
+                end_time = start_time + pd.Timedelta(seconds=lap["total_elapsed_time"])
+
+            # Filter records within this lap
+            lap_records = self.resampled_df[
+                (self.resampled_df["timestamp"] >= start_time)
+                & (self.resampled_df["timestamp"] <= end_time)
+            ]
+
+            # Calculate distance and duration
+            duration_seconds = lap["total_elapsed_time"]
+            distance_km = lap.get("total_distance", 0) / 1000  # Convert m to km
+
+            # Get average power from lap data or calculate from records
+            if "avg_power" in lap and lap["avg_power"] is not None:
+                avg_power = lap["avg_power"]
+            elif "power" in lap_records.columns and not lap_records.empty:
+                avg_power = lap_records["power"].mean()
+            else:
+                avg_power = 0
+
+            # Get average speed directly from lap data - NO recalculation
+            avg_speed_kmh = 0
+            if "avg_speed" in lap and lap["avg_speed"] is not None:
+                # Convert from m/s to km/h
+                avg_speed_kmh = lap["avg_speed"] * 3.6
+
+            lap_info = {
+                "lap_number": i + 1,
+                "start_time": start_time,
+                "end_time": end_time,
+                "duration": duration_seconds,
+                "distance": distance_km,
+                "avg_power": avg_power,
+                "avg_speed": avg_speed_kmh,
+            }
+
+            # Get position data
+            if "start_position_lat" in lap and "start_position_long" in lap:
+                if pd.notna(lap["start_position_lat"]) and pd.notna(
+                    lap["start_position_long"]
+                ):
+                    lap_info["start_lat"] = lap["start_position_lat"]
+                    lap_info["start_lon"] = lap["start_position_long"]
+            elif (
+                self.has_gps
+                and not lap_records.empty
+                and "position_lat" in lap_records.columns
+                and "position_long" in lap_records.columns
+            ):
+                # Find first record with valid position data
+                valid_positions = lap_records.dropna(
+                    subset=["position_lat", "position_long"]
+                )
+                if not valid_positions.empty:
+                    first_record = valid_positions.iloc[0]
+                    lap_info["start_lat"] = first_record["position_lat"]
+                    lap_info["start_lon"] = first_record["position_long"]
+
+            lap_data.append(lap_info)
+
+        return lap_data
+
+    def get_records_for_laps(self, lap_numbers):
+        """Return all records for the specified laps"""
+        if not self.laps_df.empty:
+            # Filter records for selected laps
+            selected_records = pd.DataFrame()
+
+            for lap_num in lap_numbers:
+                if lap_num <= len(self.laps_df):
+                    lap = self.laps_df.iloc[lap_num - 1]
+                    start_time = lap["start_time"]
+
+                    # Use end_time instead of timestamp
+                    if "end_time" in lap:
+                        end_time = lap["end_time"]
+                    else:
+                        # Calculate end time from start time and duration
+                        if (
+                            "total_elapsed_time" in lap
+                            and lap["total_elapsed_time"] > 0
+                        ):
+                            end_time = start_time + pd.Timedelta(
+                                seconds=lap["total_elapsed_time"]
+                            )
+                        else:
+                            end_time = lap["timestamp"]  # Fallback to timestamp
+
+                    lap_records = self.resampled_df[
+                        (self.resampled_df["timestamp"] >= start_time)
+                        & (self.resampled_df["timestamp"] <= end_time)
+                    ]
+
+                    selected_records = pd.concat([selected_records, lap_records])
+
+            # Ensure we have enough data points
+            if len(selected_records) < 30:
+                raise ValueError(
+                    f"Not enough data points ({len(selected_records)} < 30)"
+                )
+
+            return selected_records
+
+        return self.resampled_df  # Return all records if no laps defined
