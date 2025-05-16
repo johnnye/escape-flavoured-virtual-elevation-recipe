@@ -1,0 +1,106 @@
+# GitHub Actions workflow: build.yaml
+# Builds standalone, double-clickable VirtualElevation binaries on Windows, macOS and Linux.
+# Push to main, any PR, or a tag like v1.2.3 to trigger a release build.
+
+name: Build VE desktop apps
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: PyInstaller ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.12"]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install runtime requirements + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller==6.4.*
+
+      - name: Build standalone executable with PyInstaller
+        run: |
+          # One spec to rule them all – --onefile and --windowed for a clean UX
+          pyinstaller ve.spec --onefile --windowed --noconfirm
+
+      # macOS – wrap the .app inside a .dmg (Gatekeeper-friendly)
+      - name: Create dmg (macOS only)
+        if: runner.os == 'macOS'
+        run: |
+          brew install create-dmg || true
+          create-dmg --overwrite --volname "VirtualElevation" dist/*.app
+
+      # Linux – convert the output folder to an AppImage
+      - name: Package AppImage (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y libfuse2
+          wget -q https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+          ./appimagetool dist/VirtualElevation dist/VirtualElevation.AppImage
+
+      # Zip artefacts for upload
+      - name: Archive artefacts
+        shell: bash
+        run: |
+          cd dist
+          case "${{ runner.os }}" in
+            Windows) 7z a ../VirtualElevation-${{ runner.os }}.zip *.exe ;;    # one-file .exe
+            macOS)   zip -r ../VirtualElevation-${{ runner.os }}.zip *.app *.dmg ;;
+            Linux)   zip -r ../VirtualElevation-${{ runner.os }}.zip VirtualElevation*.AppImage VirtualElevation* ;;  # include AppImage & fallback folder
+          esac
+
+      - name: Upload build artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VirtualElevation-${{ runner.os }}
+          path: VirtualElevation-${{ runner.os }}.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artefacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: VirtualElevation-*
+          path: ./dist
+
+      - name: Generate release notes & publish
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+
+      - name: Upload binaries to release
+        run: |
+          for file in dist/**/*.zip; do
+            gh release upload "$GITHUB_REF_NAME" "$file" --clobber;
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
