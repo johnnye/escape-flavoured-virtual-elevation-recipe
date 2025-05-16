@@ -1,13 +1,11 @@
-# .github/workflows/build.yaml
-# CI pipeline: builds VirtualElevationRecipes binaries on Windows, macOS and Linux
-# and attaches them to the run or to a tagged GitHub Release.
+# .github/workflows/build.yaml – updated to fix macOS dmg creation and Linux AppImage
 
 name: Build VirtualElevationRecipes desktop apps
 
 on:
   push:
     branches: [main]
-    tags: ["v*.*.*"]      # e.g. v1.3.0 triggers a release build
+    tags: ["v*.*.*"]
   pull_request:
   workflow_dispatch:
 
@@ -41,23 +39,40 @@ jobs:
         run: |
           pyinstaller ve.spec --clean --noconfirm
 
-      # macOS – wrap the .app inside a .dmg so Gatekeeper won’t complain
-      - name: Create dmg (macOS only)
+      # ---------------------------- macOS packaging -------------------------
+      # Use native hdiutil instead of create-dmg to avoid flag mismatch.
+      - name: Package .app into .dmg (macOS only)
         if: runner.os == 'macOS'
         run: |
-          brew install create-dmg || true
-          create-dmg --overwrite --volname "VirtualElevationRecipes" dist/*.app
+          APP_PATH="dist/VirtualElevationRecipes.app"
+          DMG_NAME="VirtualElevationRecipes.dmg"
+          hdiutil create "$DMG_NAME" \
+            -volname "VirtualElevationRecipes" \
+            -srcfolder "$APP_PATH" \
+            -ov -format UDZO
 
-      # Linux – convert onedir bundle to an AppImage for easy distribution
+      # ---------------------------- Linux packaging -------------------------
       - name: Package AppImage (Linux only)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update && sudo apt-get install -y libfuse2
           wget -q https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage -O appimagetool
           chmod +x appimagetool
-          ./appimagetool dist/VirtualElevationRecipes dist/VirtualElevationRecipes.AppImage
+          BUILD_DIR="dist/VirtualElevationRecipes"
+          # minimal .desktop file for appimagetool
+          cat > "$BUILD_DIR/VirtualElevationRecipes.desktop" <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=VirtualElevationRecipes
+          Exec=VirtualElevationRecipes
+          Icon=VE_icon
+          Categories=Utility;
+          EOF
+          # ensure the icon is inside the bundle
+          cp VE_icon.png "$BUILD_DIR/VE_icon.png" || true
+          ./appimagetool -n "$BUILD_DIR" "dist/VirtualElevationRecipes.AppImage"
 
-      # Zip artefacts per platform
+      # ---------------------------- Archive artefacts -----------------------
       - name: Archive artefacts
         shell: bash
         run: |
