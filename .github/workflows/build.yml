@@ -1,5 +1,4 @@
-# # .github/workflows/build.yaml – resilient packaging on all OSes
-
+# .github/workflows/build.yaml
 name: Build VirtualElevationRecipes desktop apps
 
 on:
@@ -11,7 +10,6 @@ on:
 
 jobs:
   build:
-    name: PyInstaller ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -20,78 +18,42 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller==6.4.* tomlkit==0.12.*
+          pip install pyinstaller==6.4.*
 
-      - name: Build application using ve.spec
-        run: pyinstaller ve.spec --clean --noconfirm
-
-      # ------------------------------ macOS dmg -----------------------------
-      - name: Package .app into .dmg (macOS only)
-        if: runner.os == 'macOS'
-        shell: bash
+      # ---------- SINGLE-LINE BUILD (no .spec) ----------
+      - name: Build app with PyInstaller
+        shell: bash                   # Windows runner will auto-convert
         run: |
-          APP_PATH="dist/VirtualElevationRecipes.app"
-          DMG_NAME="VirtualElevationRecipes.dmg"
-          hdiutil create "$DMG_NAME" -volname "VirtualElevationRecipes" \
-                                    -srcfolder "$APP_PATH" -ov -format UDZO
-      # ------------------------------ Linux AppImage ------------------------
-      - name: Package AppImage (Linux only)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo apt-get update && sudo apt-get install -y libfuse2
-          wget -q https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage -O appimagetool
-          chmod +x appimagetool
-          BUILD_DIR="dist/VirtualElevationRecipes"
-          # Create minimal desktop file for appimagetool
-          cat > "$BUILD_DIR/VirtualElevationRecipes.desktop" <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=VirtualElevationRecipes
-          Exec=VirtualElevationRecipes
-          Icon=VE_icon
-          Categories=Utility;
-          EOF
-          cp VE_icon.png "$BUILD_DIR/VE_icon.png" || true
-          ./appimagetool -n "$BUILD_DIR" "dist/VirtualElevationRecipes.AppImage"
-
-      # ------------------------------ Archive artefacts ---------------------
-      # Windows uses PowerShell's Compress‑Archive; mac/Linux use zip utility.
-      - name: Zip artefact (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "dist/VirtualElevationRecipes/*" -DestinationPath "VirtualElevationRecipes-Windows.zip"
-
-      - name: Zip artefact (macOS & Linux)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          cd dist
+          # pick the right icon for the current OS
           case "${{ runner.os }}" in
-            macOS) zip -r ../VirtualElevationRecipes-macOS.zip *.app *.dmg ;;
-            Linux) zip -r ../VirtualElevationRecipes-Linux.zip VirtualElevationRecipes*.AppImage VirtualElevationRecipes ;;
+            macOS)   ICON=".assets/VirtualElevationRecipes.icns" ;;
+            Windows) ICON=".assets/VirtualElevationRecipes.ico"  ;;
+            Linux)   ICON="" ;;   # Linux ignores --icon; desktop files set it later
           esac
 
-      - name: Upload build artefact
+          pyinstaller --onefile --windowed --strip --clean \
+                      ${ICON:+--icon="$ICON"} \
+                      --name "VirtualElevationRecipes" \
+                      main.py
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: VirtualElevationRecipes-${{ runner.os }}
           path: |
-            *.zip
+            dist/VirtualElevationRecipes*
+          retention-days: 5 
           if-no-files-found: error
 
   release:
@@ -101,23 +63,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
+    
     steps:
-      - name: Download artefacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: VirtualElevationRecipes-*
           path: ./dist
-
-      - name: Generate release and upload binaries
+      
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          files: dist/**/*
           generate_release_notes: true
-
-      - name: Upload zips to release
-        run: |
-          for file in dist/**/*.zip; do
-            gh release upload "$GITHUB_REF_NAME" "$file" --clobber
-          done
-        env:
-          GH_TOKEN: ${{ github.token }}
