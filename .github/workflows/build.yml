@@ -72,15 +72,37 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release_files
-          # Rename files with platform suffix
-          for file in dist/**/VirtualElevationRecipes*; do
-            platform=$(echo $file | grep -o 'macOS\|Windows\|Linux')
-            filename=$(basename "$file")
-            ext="${filename##*.}"
-            if [ "$ext" = "$filename" ]; then ext=""; else ext=".$ext"; fi
-            cp "$file" "release_files/VirtualElevationRecipes-${platform}${ext}"
+          
+          # Find and package artifacts by platform
+          find dist -name "VirtualElevationRecipes*" | while read file; do
+            platform=""
+            if [[ "$file" == *"macOS"* ]]; then
+              platform="macOS"
+              # For macOS, zip the .app directory
+              if [[ -d "$file" && "$file" == *.app ]]; then
+                (cd $(dirname "$file") && zip -r "../../release_files/VirtualElevationRecipes-${platform}.zip" $(basename "$file"))
+                continue
+              fi
+            elif [[ "$file" == *"Windows"* ]]; then
+              platform="Windows"
+            elif [[ "$file" == *"Linux"* ]]; then
+              platform="Linux"
+            else
+              # Try to determine from file extension
+              if [[ "$file" == *.exe ]]; then
+                platform="Windows"
+              elif [[ "$file" == *.AppImage ]]; then
+                platform="Linux"
+              fi
+            fi
+            
+            # If it's a regular file, copy it with platform suffix
+            if [[ -f "$file" ]]; then
+              filename=$(basename "$file")
+              cp "$file" "release_files/VirtualElevationRecipes-${platform}-${filename}"
+            fi
           done
-      
+          
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
