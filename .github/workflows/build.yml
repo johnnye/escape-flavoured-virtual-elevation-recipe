@@ -75,29 +75,35 @@ jobs:
         run: |
           mkdir -p release_files
           
-          # Find and package artifacts by platform
-          find dist -type f -name "VirtualElevationRecipes*" | grep -v "\.ic[on]s$" | while read file; do
-            platform=""
-            if [[ "$file" == *"macOS"* ]]; then
-              platform="macOS"
-              # For macOS, we only want the .app directory
-              if [[ -d "${file%.app}" && "$file" == *.app ]]; then
-                (cd $(dirname "$file") && zip -r "../../release_files/VirtualElevationRecipes-${platform}.zip" $(basename "$file"))
-                continue
+          # Debug: List downloaded artifacts
+          find dist -type f -o -name "*.app" | sort
+          
+          # Process macOS artifacts
+          find dist -path "*macOS*" | while read item; do
+            if [[ -d "$item" && "$item" == *".app" ]]; then
+              # It's an app bundle directory
+              (cd $(dirname "$item") && zip -r "../../release_files/VirtualElevationRecipes-macOS.zip" $(basename "$item"))
+            elif [[ -f "$item" && "$item" != *".icns" && "$item" != *".ico" ]]; then
+              # It's a binary file, not an icon
+              if [[ "$item" == *".app.zip" || "$item" == *".zip" ]]; then
+                # Already zipped app bundle
+                cp "$item" "release_files/VirtualElevationRecipes-macOS.zip"
               fi
-              # Skip non-app macOS files
-              [[ "$file" != *.app ]] && continue
-            elif [[ "$file" == *"Windows"* ]]; then
-              platform="Windows"
-              extension=".exe"
-            elif [[ "$file" == *"Linux"* ]]; then
-              platform="Linux"
-              extension=""
             fi
-            
-            # Copy file with consistent naming
-            cp "$file" "release_files/VirtualElevationRecipes-${platform}${extension}"
           done
+          
+          # Process Windows artifacts
+          find dist -path "*Windows*" -name "*.exe" | while read item; do
+            cp "$item" "release_files/VirtualElevationRecipes-Windows.exe"
+          done
+          
+          # Process Linux artifacts
+          find dist -path "*Linux*" -type f | grep -v "\.ico$\|\.icns$" | while read item; do
+            cp "$item" "release_files/VirtualElevationRecipes-Linux"
+          done
+          
+          # Debug: List prepared release files
+          ls -la release_files/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
