@@ -53,6 +53,8 @@ jobs:
           name: VirtualElevationRecipes-${{ runner.os }}
           path: |
             dist/VirtualElevationRecipes*
+            !dist/*.icns
+            !dist/*.ico
           retention-days: 5 
           if-no-files-found: error
 
@@ -74,35 +76,29 @@ jobs:
           mkdir -p release_files
           
           # Find and package artifacts by platform
-          find dist -name "VirtualElevationRecipes*" | while read file; do
+          find dist -type f -name "VirtualElevationRecipes*" | grep -v "\.ic[on]s$" | while read file; do
             platform=""
             if [[ "$file" == *"macOS"* ]]; then
               platform="macOS"
-              # For macOS, zip the .app directory
-              if [[ -d "$file" && "$file" == *.app ]]; then
+              # For macOS, we only want the .app directory
+              if [[ -d "${file%.app}" && "$file" == *.app ]]; then
                 (cd $(dirname "$file") && zip -r "../../release_files/VirtualElevationRecipes-${platform}.zip" $(basename "$file"))
                 continue
               fi
+              # Skip non-app macOS files
+              [[ "$file" != *.app ]] && continue
             elif [[ "$file" == *"Windows"* ]]; then
               platform="Windows"
+              extension=".exe"
             elif [[ "$file" == *"Linux"* ]]; then
               platform="Linux"
-            else
-              # Try to determine from file extension
-              if [[ "$file" == *.exe ]]; then
-                platform="Windows"
-              elif [[ "$file" == *.AppImage ]]; then
-                platform="Linux"
-              fi
+              extension=""
             fi
             
-            # If it's a regular file, copy it with platform suffix
-            if [[ -f "$file" ]]; then
-              filename=$(basename "$file")
-              cp "$file" "release_files/VirtualElevationRecipes-${platform}-${filename}"
-            fi
+            # Copy file with consistent naming
+            cp "$file" "release_files/VirtualElevationRecipes-${platform}${extension}"
           done
-          
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
