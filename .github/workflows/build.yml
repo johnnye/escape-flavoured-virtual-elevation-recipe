@@ -47,6 +47,13 @@ jobs:
                       --name "VirtualElevationRecipes" \
                       main.py
 
+      - name: Test executable loading
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cd dist
+          VirtualElevationRecipes.exe --help || echo "Exit code: %errorlevel%"
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
