@@ -47,12 +47,22 @@ jobs:
                       --name "VirtualElevationRecipes" \
                       main.py
 
-      - name: Test executable loading
+      - name: Smoke-test GUI binary (no CLI flags)
         if: runner.os == 'Windows'
-        shell: cmd
+        shell: pwsh
         run: |
-          cd dist
-          VirtualElevationRecipes.exe --help || echo "Exit code: %errorlevel%"
+          $exe  = Join-Path $PWD 'dist\VirtualElevationRecipes.exe'
+
+          Write-Host "Launching $exe …"
+          $p = Start-Process -FilePath $exe -WindowStyle Hidden -PassThru
+
+          Start-Sleep -Seconds 15          # loader usually fails in <½ sec
+          if ($p.HasExited) {
+              Throw "❌ Binary exited early with code $($p.ExitCode) – loader crash."
+          }
+
+          Write-Host "✅ Loader happy; killing the process."
+          Stop-Process -Id $p.Id
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
