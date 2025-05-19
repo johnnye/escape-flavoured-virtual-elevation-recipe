@@ -42,7 +42,9 @@ jobs:
             Linux)   ICON="" ;;   # Linux ignores --icon; desktop files set it later
           esac
 
-          pyinstaller --onefile --windowed --strip --clean \
+          pyinstaller --onefile --windowed --clean \
+                      ${{ runner.os != 'Windows' && '--strip' || '' }} \
+                      --noupx \
                       ${ICON:+--icon="$ICON"} \
                       --name "VirtualElevationRecipes" \
                       main.py
