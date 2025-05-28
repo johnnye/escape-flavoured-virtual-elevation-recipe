@@ -41,6 +41,7 @@ class Settings:
 
         # ---------- defaults ----------
         self.last_file: str = ""
+        self.last_dem_file: str = ""
         self.result_dir: str = str(get_results_dir())  # <── new sensible default
 
         self.load_settings()
@@ -57,6 +58,7 @@ class Settings:
         # Safely pull each key in case the JSON is missing fields
         self.last_file = data.get("last_file", self.last_file)
         self.result_dir = data.get("result_dir", self.result_dir)
+        self.last_dem_file = data.get("last_dem_file", self.last_dem_file)
 
     def save_settings(self) -> None:
         """
@@ -66,6 +68,7 @@ class Settings:
         data = {
             "last_file": self.last_file,
             "result_dir": self.result_dir,
+            "last_dem_file": self.last_dem_file,
         }
         try:
             save_json(data, self.settings_file)
