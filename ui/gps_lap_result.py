@@ -1082,7 +1082,7 @@ class GPSLapResult(QMainWindow):
 
                     # Plot VE
                     (line1,) = ax1.plot(
-                        distances, calibrated_ve, color=color, linewidth=2
+                        distances, calibrated_ve, color=color, linewidth=4
                     )
                     legend_handles.append(line1)
                     legend_labels.append(f"Lap {lap_idx+1}")
@@ -1110,11 +1110,11 @@ class GPSLapResult(QMainWindow):
                                 - reference_elevation[valid_mask]
                             )
                             ax2.plot(
-                                residual_distances, residuals, color=color, linewidth=2
+                                residual_distances, residuals, color=color, linewidth=3.5
                             )
                     else:
                         # If no reference elevation, use the original VE as residuals
-                        ax2.plot(distances, calibrated_ve, color=color, linewidth=2)
+                        ax2.plot(distances, calibrated_ve, color=color, linewidth=3.5)
 
             # Set axis limits
             ax1.set_xlim(0, max_dist)
@@ -1169,13 +1169,14 @@ class GPSLapResult(QMainWindow):
             crr_str = f"Crr: {self.current_crr:.4f}"
             error_str = f"Total Error: {total_error:.2f} m"
 
-            ax1.text(
-                0.02,
-                0.95,
+            self.fig_canvas.fig.text(
+                0.01,
+                0.99,
                 cda_str + "\n" + crr_str + "\n" + error_str,
-                transform=ax1.transAxes,
                 verticalalignment="top",
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+                horizontalalignment="left",
+                transform=self.fig_canvas.fig.transFigure,
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
             )
 
         self.fig_canvas.fig.tight_layout()

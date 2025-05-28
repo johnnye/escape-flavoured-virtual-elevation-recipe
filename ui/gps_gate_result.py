@@ -684,11 +684,18 @@ class GPSGateResult(QMainWindow):
                     gate_b = self.map_time_to_route_index(gate_set["gate_b_pos"])
                     route_gate_positions.append((gate_a, gate_b))
 
-            # Make sure indices are valid
-            route_trim_start = max(0, min(route_trim_start, len(self.route_points) - 1))
-            route_trim_end = max(
-                route_trim_start, min(route_trim_end, len(self.route_points) - 1)
-            )
+            # Make sure indices are valid - handle None values
+            if route_trim_start is None:
+                route_trim_start = 0
+            else:
+                route_trim_start = max(0, min(route_trim_start, len(self.route_points) - 1))
+            
+            if route_trim_end is None:
+                route_trim_end = len(self.route_points) - 1
+            else:
+                route_trim_end = max(
+                    route_trim_start, min(route_trim_end, len(self.route_points) - 1)
+                )
 
             # Clean up gate positions
             valid_gate_positions = []
@@ -1556,7 +1563,7 @@ class GPSGateResult(QMainWindow):
                         offset_distances,
                         calibrated_ve,
                         color=color,
-                        linewidth=2,
+                        linewidth=4,
                         alpha=(
                             0.8 if i == 0 else 0.6
                         ),  # First passing of each gate set is more opaque
@@ -1614,7 +1621,7 @@ class GPSGateResult(QMainWindow):
             # Plot all residuals
             for residual_distances, residuals, color, alpha in all_residuals:
                 ax2.plot(
-                    residual_distances, residuals, color=color, linewidth=2, alpha=alpha
+                    residual_distances, residuals, color=color, linewidth=3.5, alpha=alpha
                 )
 
             # Add zero line in residuals plot
@@ -1669,13 +1676,14 @@ class GPSGateResult(QMainWindow):
             crr_str = f"Crr: {self.current_crr:.4f}"
             error_str = f"Total Error: {total_error:.2f} m"
 
-            ax1.text(
-                0.02,
-                0.95,
+            self.fig_canvas.fig.text(
+                0.01,
+                0.99,
                 cda_str + "\n" + crr_str + "\n" + error_str,
-                transform=ax1.transAxes,
                 verticalalignment="top",
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+                horizontalalignment="left",
+                transform=self.fig_canvas.fig.transFigure,
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
             )
 
         self.fig_canvas.fig.tight_layout()

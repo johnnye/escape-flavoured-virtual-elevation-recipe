@@ -67,9 +67,9 @@ class FileSelector(QMainWindow):
         self.close_button = QPushButton("Close App")
         self.close_button.clicked.connect(self.close)
 
-        button_layout.addWidget(self.analyze_button)
-        button_layout.addStretch()
         button_layout.addWidget(self.close_button)
+        button_layout.addStretch()
+        button_layout.addWidget(self.analyze_button)
 
         # Add layouts to main layout
         main_layout.addLayout(file_layout)

@@ -1453,7 +1453,7 @@ class OutAndBackResult(QMainWindow):
                             outbound_distances,
                             calibrated_outbound_ve,
                             color=section_color,
-                            linewidth=2,
+                            linewidth=4,
                             linestyle="-",
                         )
                         legend_handles.append(line1)
@@ -1528,7 +1528,7 @@ class OutAndBackResult(QMainWindow):
                             mirrored_inbound_distances,
                             calibrated_inbound_ve,
                             color=section_color,  # Same color as outbound
-                            linewidth=2,
+                            linewidth=4,
                             linestyle="--",  # Dashed line for inbound
                         )
                         legend_handles.append(line2)
@@ -1580,7 +1580,7 @@ class OutAndBackResult(QMainWindow):
                     residual_distances,
                     residuals,
                     color=color,
-                    linewidth=2,
+                    linewidth=3.5,
                     linestyle="-",
                 )
 
@@ -1590,7 +1590,7 @@ class OutAndBackResult(QMainWindow):
                     residual_distances,
                     residuals,
                     color=color,
-                    linewidth=2,
+                    linewidth=3.5,
                     linestyle="--",
                 )
 
@@ -1636,13 +1636,14 @@ class OutAndBackResult(QMainWindow):
                 + f"Diff to actual: {sum_of_both_abs:.2f} m"
             )
 
-            ax1.text(
-                0.02,
-                0.95,
+            self.fig_canvas.fig.text(
+                0.01,
+                0.99,
                 cda_str + "\n" + crr_str + "\n" + error_str,
-                transform=ax1.transAxes,
                 verticalalignment="top",
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+                horizontalalignment="left",
+                transform=self.fig_canvas.fig.transFigure,
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
             )
 
         self.fig_canvas.fig.tight_layout()
