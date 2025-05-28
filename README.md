@@ -80,6 +80,15 @@ The tool calculates virtual elevation using the power balance equation:
 Power = Aero_drag + Rolling_resistance + Gravity + Acceleration
 ```
 
+### Correcting GPS Elevation
+For France:
+ - Download 1m rgealti here: https://geoservices.ign.fr/rgealti#telechargement1m
+ - Extract the 7zip
+ - cd RGEALTI/1_DONNEES_LIVRAISON_2021-01-00157/RGEALTI_MNT_1M_ASC_LAMB93_IGN69_D075_20210118
+ - gdalbuildvrt -a_srs EPSG:2154 -allow_projection_difference mosaic_l93.vrt *.asc
+
+Use this mosaic_l93.vrt file from the "Correct Elevation" dialog.
+
 ### Parameters
 - **CdA**: Coefficient of drag × frontal area (m²)
 - **Crr**: Coefficient of rolling resistance

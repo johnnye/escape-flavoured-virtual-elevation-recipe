@@ -1,11 +1,41 @@
 import numpy as np
 import pandas as pd
 from fitparse import FitFile as FitParser
+import rasterio
+from pyproj import Transformer
 
+class AltitudeLookup:
+    def __init__(self, dem_path):
+        self.dataset = rasterio.open(dem_path)
+        self.transformer = Transformer.from_crs("EPSG:4326", self.dataset.crs, always_xy=True)
+        self.band = self.dataset.read(1)
+
+    def get_altitude(self, lat, lon):
+        try:
+            x, y = self.transformer.transform(lon, lat)
+            row, col = self.dataset.index(x, y)
+
+            if (
+                0 <= row < self.band.shape[0]
+                and 0 <= col < self.band.shape[1]
+            ):
+                return float(self.band[row, col])
+            else:
+                return None
+
+        except Exception as e:
+            print(f"Error at ({lat}, {lon}): {e}")
+            return None
+
+    def close(self):
+        self.dataset.close()
 
 class FitFile:
-    def __init__(self, filename):
+    def __init__(self, filename, dem_filename):
         """Load and parse a FIT file"""
+        self.elevation = AltitudeLookup(dem_filename) if dem_filename else None
+        self.elevation_error_rate = 0
+
         self.filename = filename
         self.fit_parser = FitParser(filename)
 
@@ -135,6 +165,7 @@ class FitFile:
             self.has_gps = False
         else:
             self.has_gps = True
+            self.elevation_error_count = 0
             # Convert semicircles to degrees for lat/long
             if self.records_df["position_lat"].dtype in [
                 np.int32,
@@ -147,6 +178,16 @@ class FitFile:
                 self.records_df["position_long"] = self.records_df["position_long"] * (
                     180 / 2**31
                 )
+                if self.elevation:
+                    def try_get_altitude(row):
+                        alt = self.elevation.get_altitude(row["position_lat"],
+                                                          row["position_long"])
+                        if alt is None:
+                            self.elevation_error_count += 1
+                            return row["altitude"]
+                        return alt
+                    self.records_df["altitude"] = self.records_df.apply(try_get_altitude, axis=1)
+                self.elevation_error_rate = self.elevation_error_count / self.records_df["altitude"].count()
 
     def resample_data(self):
         """Resample data to 1s intervals"""
@@ -291,3 +332,6 @@ class FitFile:
             return selected_records
 
         return self.resampled_df  # Return all records if no laps defined
+
+    def get_elevation_error_rate(self):
+        return self.elevation_error_rate

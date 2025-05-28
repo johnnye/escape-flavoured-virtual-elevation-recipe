@@ -58,6 +58,20 @@ class FileSelector(QMainWindow):
         dir_layout.addWidget(self.dir_path)
         dir_layout.addWidget(self.dir_button)
 
+        # DEM File selection
+        dem_file_layout = QHBoxLayout()
+        self.dem_file_label = QLabel("Correct Elevation:")
+        self.dem_file_path = QLineEdit()
+        if self.settings.last_dem_file and os.path.exists(self.settings.last_dem_file):
+            self.dem_file_path.setText(self.settings.last_dem_file)
+        self.dem_file_button = QPushButton("Browse")
+        self.dem_file_button.clicked.connect(self.select_dem_file)
+        self.dem_file_path.editingFinished.connect(self.dem_file_path_edited)
+
+        dem_file_layout.addWidget(self.dem_file_label)
+        dem_file_layout.addWidget(self.dem_file_path)
+        dem_file_layout.addWidget(self.dem_file_button)
+
         # Analyze and Close buttons
         button_layout = QHBoxLayout()
         self.analyze_button = QPushButton("Analyze File")
@@ -74,6 +88,7 @@ class FileSelector(QMainWindow):
         # Add layouts to main layout
         main_layout.addLayout(file_layout)
         main_layout.addLayout(dir_layout)
+        main_layout.addLayout(dem_file_layout)
         main_layout.addStretch()
         main_layout.addLayout(button_layout)
 
@@ -90,12 +105,33 @@ class FileSelector(QMainWindow):
             self.settings.last_file = file_path
             self.settings.save_settings()
 
+    def select_dem_file(self):
+        dem_file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select DEM File (*.vrt *.tif)", "",
+            "DEM Files (*.vrt *.tif *.tiff);;VRT Files (*.vrt);;GeoTIFF Files (*.tif *.tiff)"
+        )
+
+        if dem_file_path:
+            self.dem_file_path.setText(dem_file_path)
+            self.settings.last_dem_file = dem_file_path
+            self.settings.save_settings()
+
+    def dem_file_path_edited(self):
+        dem_file_path = self.dem_file_path.text()
+        self.settings.last_dem_file = dem_file_path
+        self.settings.save_settings()
+
     def analyze_file(self):
         file_path = self.file_path.text()
+        dem_file_path = self.dem_file_path.text()
 
         if not file_path or not os.path.exists(file_path):
             QMessageBox.warning(self, "Invalid File", "Please select a valid FIT file.")
             return
+
+        if dem_file_path and not os.path.exists(dem_file_path):
+            QMessageBox.warning(self, "Invalid DEM File", "Not correcting elevation")
+            dem_file_path = None
 
         # Create results directory if it doesn't exist
         result_dir = self.dir_path.text()
@@ -106,7 +142,14 @@ class FileSelector(QMainWindow):
 
         try:
             # Load the fit file and open analysis window
-            fit_file = FitFile(file_path)
+            fit_file = FitFile(file_path, dem_file_path)
+
+            elevation_error_rate = fit_file.get_elevation_error_rate()
+            if (elevation_error_rate != 0):
+                elevation_error_rate = int(elevation_error_rate * 100)
+                QMessageBox.warning(self, "Invalid DEM File",
+                                    f"Could not correct {elevation_error_rate}% of altitude points")
+
             # Import here to avoid circular import
             from ui.analysis_window import AnalysisWindow
 
