@@ -2,15 +2,30 @@ import numpy as np
 import pandas as pd
 from fitparse import FitFile as FitParser
 import rasterio
+from rasterio.windows import Window
+
 from pyproj import Transformer
 
 class AltitudeLookup:
     def __init__(self, dem_path):
         self.dataset = rasterio.open(dem_path)
 
-    def read(self):
+    def read(self)
         self.transformer = Transformer.from_crs("EPSG:4326", self.dataset.crs, always_xy=True)
-        self.band = self.dataset.read(1)
+        tile_size = 512
+        width, height = self.dataset.width, self.dataset.height
+        # preallocate
+        self.band = np.zeros((height, width), dtype=self.dataset.dtypes[0])
+
+        # read in small tiles in order to check for cancelation
+        for y in range(0, height, tile_size):
+            for x in range(0, width, tile_size):
+                win_width = min(tile_size, width - x)
+                win_height = min(tile_size, height - y)
+                window = Window(x, y, win_width, win_height)
+
+                tile = self.dataset.read(1, window=window)
+                self.band[y:y+win_height, x:x+win_width] = tile
 
     def get_altitude(self, lat, lon):
         try:
