@@ -595,17 +595,27 @@ class AnalysisResult(QMainWindow):
         ax1 = self.fig_canvas.fig.add_subplot(gs[0])
         ax2 = self.fig_canvas.fig.add_subplot(gs[1])
 
-        # Create time array (assuming 1s intervals)
-        time = np.arange(len(self.virtual_elevation))
+        # Use recorded distance from FIT file (convert to km) and reset to start from 0
+        if 'distance' in self.merged_data.columns and not self.merged_data['distance'].isna().all():
+            # Use recorded distance from FIT file (in meters), reset to start from 0, convert to km
+            distance_raw = self.merged_data['distance'].values
+            distance = (distance_raw - distance_raw[0]) / 1000  # Reset to 0 and convert to km
+        elif hasattr(self.ve_calculator, 'df') and 'v' in self.ve_calculator.df.columns:
+            # Fallback: calculate cumulative distance from speed (v is in m/s, dt=1s)
+            distance_m = np.cumsum(self.ve_calculator.df['v'].values * self.ve_calculator.dt)
+            distance = distance_m / 1000  # Convert to km
+        else:
+            # Final fallback to time-based if no distance or speed data
+            distance = np.arange(len(self.virtual_elevation)) / 1000
 
         # Plot virtual elevation with FULL OPACITY in trimmed region, REDUCED OPACITY elsewhere
         # First plot full curve with reduced opacity
         ax1.plot(
-            time,
+            distance,
             self.virtual_elevation_calibrated,
             color="blue",
             alpha=0.3,
-            linewidth=1,
+            linewidth=3,
             label="_nolegend_",
         )
 
@@ -616,26 +626,29 @@ class AnalysisResult(QMainWindow):
 
         # Ensure we have a valid range
         if trim_start <= trim_end:
-            trim_time = time[trim_start : trim_end + 1]
+            trim_distance = distance[trim_start : trim_end + 1]
             trim_ve = self.virtual_elevation_calibrated[trim_start : trim_end + 1]
             ax1.plot(
-                trim_time,
+                trim_distance,
                 trim_ve,
                 color="blue",
                 alpha=1.0,
-                linewidth=2,
+                linewidth=4,
                 label="Virtual Elevation",
             )
 
         # Mark trimmed region with higher opacity - use lower opacity (0.1) for excluded regions
-        ax1.axvspan(0, self.trim_start, alpha=0.1, color="gray")
-        ax1.axvspan(self.trim_end, len(self.virtual_elevation), alpha=0.1, color="gray")
+        if len(distance) > 0:
+            ax1.axvspan(0, distance[self.trim_start] if self.trim_start < len(distance) else 0, alpha=0.1, color="gray")
+            ax1.axvspan(distance[self.trim_end] if self.trim_end < len(distance) else distance[-1], distance[-1], alpha=0.1, color="gray")
 
         # Add vertical lines at trim points WITHOUT adding to legend
-        ax1.axvline(
-            x=self.trim_start, color="green", linestyle="--", label="_nolegend_"
-        )
-        ax1.axvline(x=self.trim_end, color="red", linestyle="--", label="_nolegend_")
+        if self.trim_start < len(distance):
+            ax1.axvline(
+                x=distance[self.trim_start], color="green", linestyle="--", label="_nolegend_"
+            )
+        if self.trim_end < len(distance):
+            ax1.axvline(x=distance[self.trim_end], color="red", linestyle="--", label="_nolegend_")
 
         # Add grid lines
         ax1.grid(True, linestyle="--", alpha=0.3)
@@ -644,20 +657,20 @@ class AnalysisResult(QMainWindow):
         if self.actual_elevation is not None:
             # Ensure same length
             min_len = min(
-                len(self.virtual_elevation_calibrated), len(self.actual_elevation)
+                len(self.virtual_elevation_calibrated), len(self.actual_elevation), len(distance)
             )
-            time_trim = time[:min_len]
+            distance_trim = distance[:min_len]
             ve_trim = self.virtual_elevation_calibrated[:min_len]
             elev_trim = self.actual_elevation[:min_len]
 
             # Plot actual elevation with REDUCED OPACITY outside trim region
             # First plot full curve with reduced opacity
             ax1.plot(
-                time_trim,
+                distance_trim,
                 elev_trim,
                 color="black",
                 alpha=0.3,
-                linewidth=1,
+                linewidth=2,
                 label="_nolegend_",
             )
 
@@ -666,10 +679,10 @@ class AnalysisResult(QMainWindow):
 
             # Ensure we have a valid range
             if trim_start <= trim_end_safe:
-                trim_time = time_trim[trim_start : trim_end_safe + 1]
+                trim_distance = distance_trim[trim_start : trim_end_safe + 1]
                 trim_elev = elev_trim[trim_start : trim_end_safe + 1]
                 ax1.plot(
-                    trim_time,
+                    trim_distance,
                     trim_elev,
                     color="black",
                     alpha=1.0,
@@ -681,31 +694,34 @@ class AnalysisResult(QMainWindow):
             residuals = ve_trim - elev_trim
 
             # First plot full residuals with reduced opacity
-            ax2.plot(time_trim, residuals, color="gray", alpha=0.3, linewidth=1)
+            ax2.plot(distance_trim, residuals, color="gray", alpha=0.3, linewidth=3)
 
             # Then plot just the trimmed region with full opacity
             if trim_start <= trim_end_safe:
-                trim_time = time_trim[trim_start : trim_end_safe + 1]
+                trim_distance = distance_trim[trim_start : trim_end_safe + 1]
                 trim_residuals = residuals[trim_start : trim_end_safe + 1]
                 ax2.plot(
-                    trim_time, trim_residuals, color="gray", alpha=1.0, linewidth=2
+                    trim_distance, trim_residuals, color="gray", alpha=1.0, linewidth=4
                 )
 
             ax2.axhline(y=0, color="black", linestyle="-")
 
             # Mark trimmed region in residuals - use lower opacity (0.1) for excluded regions
-            ax2.axvspan(0, self.trim_start, alpha=0.1, color="gray")
-            ax2.axvspan(self.trim_end, min_len, alpha=0.1, color="gray")
+            if len(distance_trim) > 0:
+                ax2.axvspan(0, distance_trim[self.trim_start] if self.trim_start < len(distance_trim) else 0, alpha=0.1, color="gray")
+                ax2.axvspan(distance_trim[trim_end_safe] if trim_end_safe < len(distance_trim) else distance_trim[-1], distance_trim[-1], alpha=0.1, color="gray")
 
             # Add vertical lines at trim points
-            ax2.axvline(x=self.trim_start, color="green", linestyle="--")
-            ax2.axvline(x=self.trim_end, color="red", linestyle="--")
+            if self.trim_start < len(distance_trim):
+                ax2.axvline(x=distance_trim[self.trim_start], color="green", linestyle="--")
+            if trim_end_safe < len(distance_trim):
+                ax2.axvline(x=distance_trim[trim_end_safe], color="red", linestyle="--")
 
             # Add grid to residuals plot
             ax2.grid(True, linestyle="--", alpha=0.3)
 
             # Set titles and labels
-            ax2.set_xlabel("Time (s)")
+            ax2.set_xlabel("Distance (km)")
             ax2.set_ylabel("Residuals (m)")
             ax2.set_title("Residuals (Virtual - Actual)")
 
@@ -714,16 +730,17 @@ class AnalysisResult(QMainWindow):
         ax1.set_title("Virtual Elevation Profile")
         ax1.legend()
 
-        # Add text with CdA and Crr values
+        # Add text with CdA and Crr values - positioned completely outside plot area
         cda_str = f"CdA: {self.current_cda:.3f}"
         crr_str = f"Crr: {self.current_crr:.4f}"
-        ax1.text(
-            0.02,
-            0.95,
+        self.fig_canvas.fig.text(
+            0.01,
+            0.99,
             cda_str + "\n" + crr_str,
-            transform=ax1.transAxes,
             verticalalignment="top",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            horizontalalignment="left",
+            transform=self.fig_canvas.fig.transFigure,
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
         )
 
         # Add R², RMSE and elevation gain if calculated
@@ -743,13 +760,14 @@ class AnalysisResult(QMainWindow):
             else:
                 metrics_text = f"{r2_str}\n{rmse_str}"
 
-            ax1.text(
-                0.78,
-                0.95,
+            self.fig_canvas.fig.text(
+                0.99,
+                0.99,
                 metrics_text,
-                transform=ax1.transAxes,
                 verticalalignment="top",
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+                horizontalalignment="right",
+                transform=self.fig_canvas.fig.transFigure,
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
             )
 
         self.fig_canvas.fig.tight_layout()
