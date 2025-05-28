@@ -171,3 +171,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 .assets/make-icons.sh
+CLAUDE.md
+.claude/settings.local.json
