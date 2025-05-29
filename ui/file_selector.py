@@ -12,15 +12,44 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from PySide6.QtCore import (
+    Qt,
+    QObject,
+    QRunnable,
+    QThread,
+    Signal,
+    Slot
+)
+
 from config.settings import Settings
-from models.fit_file import FitFile
-from utils.file_handling import get_results_dir  # ← add this import
+from models.fit_file import (FitFile, CancelledError)
+from utils.file_handling import get_results_dir
+
+class FitFileWorker(QObject):
+    finished = Signal(object)
+    error = Signal(Exception)
+
+    def __init__(self, fit_file):
+        super().__init__()
+        self.fit_file = fit_file
+
+    @Slot()
+    def run(self):
+        try:
+            self.fit_file.parse()
+            self.finished.emit(self.fit_file)
+        except Exception as e:
+            self.error.emit(e)
+
+    def cancel(self):
+        self.fit_file.cancel()
 
 
 class FileSelector(QMainWindow):
     def __init__(self):
         super().__init__()
         self.settings = Settings()
+        self.thread = None
         self.initUI()
 
     def initUI(self):
@@ -141,30 +170,23 @@ class FileSelector(QMainWindow):
             self.settings.result_dir = result_dir
             self.settings.save_settings()
 
-        try:
-            # Load the fit file and open analysis window
-            fit_file = FitFile(file_path, dem_file_path)
+        self.thread = QThread()
+        fit_file = FitFile(file_path, dem_file_path)
+        self.worker = FitFileWorker(fit_file)
+        self.worker.moveToThread(self.thread)
 
-            elevation_error_rate = fit_file.get_elevation_error_rate()
-            if (elevation_error_rate != 0):
-                elevation_error_rate = int(elevation_error_rate * 100)
-                QMessageBox.warning(self, "Invalid DEM File",
-                                    f"Could not correct {elevation_error_rate}% of altitude points")
+        # Connect slots
+        self.thread.started.connect(self.worker.run)
+        self.worker.finished.connect(self.on_fit_file_loaded)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+        self.worker.error.connect(self.on_fit_file_error)
+        self.worker.error.connect(self.thread.quit)
+        self.worker.error.connect(self.worker.deleteLater)
 
-            # Import here to avoid circular import
-            from ui.analysis_window import AnalysisWindow
-
-            self.analysis_window = AnalysisWindow(fit_file, self.settings)
-            self.analysis_window.show()
-            self.hide()
-        except Exception as e:
-            # Handle invalid fit file
-            error_dialog = QMessageBox()
-            error_dialog.setIcon(QMessageBox.Critical)
-            error_dialog.setText("Error loading FIT file")
-            error_dialog.setInformativeText(str(e))
-            error_dialog.setWindowTitle("Error")
-            error_dialog.exec()
+        self.thread.start()
+        self.set_ui_enabled(False)
 
     def select_directory(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Result Directory")
@@ -173,3 +195,44 @@ class FileSelector(QMainWindow):
             self.dir_path.setText(dir_path)
             self.settings.result_dir = dir_path
             self.settings.save_settings()
+
+    def set_ui_enabled(self, enabled: bool):
+        for widget in (self.file_label, self.file_button, self.file_path,
+                       self.dir_label, self.dir_path, self.dir_button,
+                       self.dem_file_label, self.dem_file_path, self.dem_file_button,
+                       self.analyze_button):
+            widget.setEnabled(enabled)
+        self.analyze_button.setText("Analyzing FIT..." if not enabled else "Analyze FIT")
+
+    def on_fit_file_loaded(self, fit_file):
+        self.set_ui_enabled(True)
+        if fit_file.elevation_error_rate != 0:
+            elevation_error_rate = int(file_file.elevation_error_rate * 100)
+            QMessageBox.warning(self, "Invalid DEM File",
+                                f"Could not correct {elevation_error_rate}% of altitude points")
+
+        from ui.analysis_window import AnalysisWindow
+        self.analysis_window = AnalysisWindow(fit_file, self.settings)
+        self.analysis_window.show()
+        self.hide()
+
+    def on_fit_file_error(self, error):
+        self.set_ui_enabled(True)
+
+        if isinstance(error, CancelledError):
+            return
+
+        error_dialog = QMessageBox()
+        error_dialog.setIcon(QMessageBox.Critical)
+        error_dialog.setText("Error loading FIT file")
+        error_dialog.setInformativeText(str(error))
+        error_dialog.setWindowTitle("Error")
+        error_dialog.exec()
+
+    def closeEvent(self, event):
+        if self.thread:
+            self.worker.cancel()
+            self.thread.quit()
+            self.thread.wait()
+            self.thread = None
+        event.accept()
