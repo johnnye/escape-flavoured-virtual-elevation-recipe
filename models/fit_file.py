@@ -7,6 +7,8 @@ from pyproj import Transformer
 class AltitudeLookup:
     def __init__(self, dem_path):
         self.dataset = rasterio.open(dem_path)
+
+    def read(self):
         self.transformer = Transformer.from_crs("EPSG:4326", self.dataset.crs, always_xy=True)
         self.band = self.dataset.read(1)
 
@@ -47,6 +49,8 @@ class FitFile:
         self.timestamps = []
 
     def parse(self):
+        if self.elevation:
+            self.elevation.read()
         self.parse_data()
         self.resample_data()
 
