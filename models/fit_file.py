@@ -1,16 +1,21 @@
 import numpy as np
 import pandas as pd
+import threading
 from fitparse import FitFile as FitParser
 import rasterio
 from rasterio.windows import Window
 
 from pyproj import Transformer
 
+class CancelledError(Exception):
+    """Raised when an operation is cancelled by the user."""
+    pass
+
 class AltitudeLookup:
     def __init__(self, dem_path):
         self.dataset = rasterio.open(dem_path)
 
-    def read(self)
+    def read(self, check_canceled=lambda: None):
         self.transformer = Transformer.from_crs("EPSG:4326", self.dataset.crs, always_xy=True)
         tile_size = 512
         width, height = self.dataset.width, self.dataset.height
@@ -26,6 +31,8 @@ class AltitudeLookup:
 
                 tile = self.dataset.read(1, window=window)
                 self.band[y:y+win_height, x:x+win_width] = tile
+
+                check_canceled()
 
     def get_altitude(self, lat, lon):
         try:
@@ -62,12 +69,21 @@ class FitFile:
         self.speed = []
         self.power = []
         self.timestamps = []
+        self.cancel_event = threading.Event()
 
     def parse(self):
         if self.elevation:
-            self.elevation.read()
+            self.elevation.read(self.check_canceled)
+
         self.parse_data()
         self.resample_data()
+
+    def cancel(self):
+        self.cancel_event.set()
+
+    def check_canceled(self):
+        if self.cancel_event.is_set():
+            raise CancelledError("cancelled")
 
     def parse_data(self):
         """Parse data from FIT file"""
@@ -141,6 +157,8 @@ class FitFile:
                             ] * (180 / 2**31)
             lap_records.append(lap_data)
 
+        self.check_canceled()
+
         # Process record messages
         for message in self.fit_parser.get_messages("record"):
             record_data = {}
@@ -167,6 +185,8 @@ class FitFile:
 
             if "timestamp" in record_data:
                 records.append(record_data)
+
+        self.check_canceled()
 
         # Convert to pandas dataframes
         self.records_df = pd.DataFrame(records)
@@ -208,6 +228,8 @@ class FitFile:
                         return alt
                     self.records_df["altitude"] = self.records_df.apply(try_get_altitude, axis=1)
                 self.elevation_error_rate = self.elevation_error_count / self.records_df["altitude"].count()
+
+        self.check_canceled()
 
     def resample_data(self):
         """Resample data to 1s intervals"""
