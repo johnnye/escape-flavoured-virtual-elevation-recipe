@@ -10,6 +10,7 @@
 - [ ] Add comprehensive exception handling and user-friendly error messages
 - [ ] Add documentation for obtaining DEM elevation data sources by country/region
   - [ ] list of DEM file sources for regions beyond France
+- [ ] Create standalone executables for Windows/MacOS/Linux that actually work for one-click launch without Python installation
 
 ## Introduction
 This tool implements the Virtual Elevation method ("Chung Method") developed by Robert Chung, which allows for the estimation of a cyclist's aerodynamic parameters (CdA) and rolling resistance (Crr) using power, speed and elevation data from cycling activities.
