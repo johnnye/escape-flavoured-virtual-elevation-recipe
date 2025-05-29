@@ -144,6 +144,7 @@ class FileSelector(QMainWindow):
         try:
             # Load the fit file and open analysis window
             fit_file = FitFile(file_path, dem_file_path)
+            fit_file.parse()
 
             elevation_error_rate = fit_file.get_elevation_error_rate()
             if (elevation_error_rate != 0):

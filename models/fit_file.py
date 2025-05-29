@@ -46,6 +46,7 @@ class FitFile:
         self.power = []
         self.timestamps = []
 
+    def parse(self):
         self.parse_data()
         self.resample_data()
 
