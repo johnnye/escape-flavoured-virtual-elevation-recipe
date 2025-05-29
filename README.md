@@ -2,6 +2,15 @@
 
 <img src=".assets/VE_icon.png" width="128" height="128" alt="Virtual Elevation Analyzer Icon">
 
+## TODO
+- [ ] Load FIT file parsing in background thread to keep UI responsive
+- [ ] Move slider calculations to background thread to prevent UI blocking
+- [ ] Add unit tests for core VirtualElevation functionality
+- [ ] Refactor GPS analysis windows to extract common base class (reduce ~2,400 lines of duplication)
+- [ ] Add comprehensive exception handling and user-friendly error messages
+- [ ] Add documentation for obtaining DEM elevation data sources by country/region
+  - [ ] list of DEM file sources for regions beyond France
+
 ## Introduction
 This tool implements the Virtual Elevation method ("Chung Method") developed by Robert Chung, which allows for the estimation of a cyclist's aerodynamic parameters (CdA) and rolling resistance (Crr) using power, speed and elevation data from cycling activities.
 
