@@ -196,6 +196,14 @@ class FileSelector(QMainWindow):
             self.settings.result_dir = dir_path
             self.settings.save_settings()
 
+    def join_thread(self, cancel: bool):
+        if self.thread:
+            if cancel:
+                self.worker.cancel()
+            self.thread.quit()
+            self.thread.wait()
+            self.thread = None
+
     def set_ui_enabled(self, enabled: bool):
         for widget in (self.file_label, self.file_button, self.file_path,
                        self.dir_label, self.dir_path, self.dir_button,
@@ -230,9 +238,5 @@ class FileSelector(QMainWindow):
         error_dialog.exec()
 
     def closeEvent(self, event):
-        if self.thread:
-            self.worker.cancel()
-            self.thread.quit()
-            self.thread.wait()
-            self.thread = None
+        self.join_thread(True)
         event.accept()
