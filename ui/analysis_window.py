@@ -53,7 +53,7 @@ class AnalysisWindow(QMainWindow):
         # Add map widget if GPS data is available
         self.map_widget = MapWidget(MapMode.LAPS, self.fit_file.resampled_df,
                                     self.file_settings)
-        if self.map_widget.has_gps:
+        if self.map_widget.has_gps():
             self.map_widget.update()
             left_layout.addWidget(self.map_widget, 2)
         else:
@@ -489,3 +489,7 @@ class AnalysisWindow(QMainWindow):
         if self.fit_file.has_gps:
             self.map_widget.set_wind(wind_speed, wind_direction)
             self.map_widget.update()
+
+    def closeEvent(self, event):
+        self.map_widget.close()
+        event.accept()

@@ -3,7 +3,12 @@ import io
 import folium
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtCore import (
+    Qt,
+    QThread,
+)
 from enum import Enum, auto
+from ui.async_worker import AsyncWorker
 
 class MapMode(Enum):
     LAPS = auto()
@@ -12,9 +17,9 @@ class MapMode(Enum):
     MARKER_AB = auto()
     MARKER_GATE_SETS = auto()
 
-class MapWidget(QWidget):
+class MapWorker(AsyncWorker):
     def __init__(self, mode: MapMode, records, params):
-        super().__init__()
+        super(MapWorker, self).__init__()
         self.records = records
         if ("position_lat" in records and "position_long" in records):
             self.has_gps = True
@@ -36,10 +41,6 @@ class MapWidget(QWidget):
 
         self.lap_data = []
         self.selected_laps = []
-        self.layout = QVBoxLayout(self)
-        self.webview = QWebEngineView()
-        self.layout.addWidget(self.webview)
-        self.layout.setContentsMargins(0, 0, 0, 0)
         self.wind_speed = params.get("wind_speed", None)
         self.wind_direction = params.get("wind_direction", None)
         self.marker_pos = 0
@@ -47,34 +48,6 @@ class MapWidget(QWidget):
         self.detected_sections = []
         self.gate_sets = []
         self.mode = mode
-
-    def set_selected_laps(self, lap_data, selected_laps):
-        """Update the selected laps and redraw the map"""
-        self.lap_data = lap_data
-        self.selected_laps = selected_laps
-
-    def set_wind(self, wind_speed, wind_direction):
-        self.wind_speed = wind_speed
-        self.wind_direction = wind_direction
-
-    def set_trim_start(self, start):
-        self.trim_start = start
-
-    def set_trim_end(self, end):
-        self.trim_end = end
-
-    def set_marker_pos(self, value):
-        self.marker_pos = value
-
-    def set_marker_a_pos(self, value):
-        self.set_marker_pos(value)
-
-    def set_marker_b_pos(self, value):
-        self.marker_b_pos = value
-
-    def set_gate_sets(self, gate_sets, detected_sections):
-        self.gate_sets = gate_sets
-        self.detected_sections = detected_sections
 
     def map_time_to_route_index(self, time_index):
         """
@@ -721,9 +694,6 @@ class MapWidget(QWidget):
         """Create and display a map from FIT file GPS data"""
         # Create a folium map
 
-        if not self.has_gps:
-            return
-
         # Create map centered on activity
         m = folium.Map(location=[self.center_lat, self.center_lon], zoom_start=12)
 
@@ -781,6 +751,81 @@ class MapWidget(QWidget):
         data = io.BytesIO()
         m.save(data, close_file=False)
 
+        return data.getvalue().decode()
+
+    def _process_value(self, values: dict):
+        for key in [
+            "lap_data",
+            "selected_laps",
+            "wind_speed",
+            "wind_direction",
+            "trim_start",
+            "trim_end",
+            "marker_pos",
+            "marker_b_pos",
+            "gate_sets",
+            "detected_sections",
+        ]:
+            if key in values:
+                setattr(self, key, values[key])
+        return self.update()
+
+class MapWidget(QWidget):
+    def __init__(self, mode: MapMode, records, params):
+        super().__init__()
+        self.map_worker = MapWorker(mode, records, params)
+        self.values = {}
+        self.layout = QVBoxLayout(self)
+        self.webview = QWebEngineView()
+        self.layout.addWidget(self.webview)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+
+        self.map_thread = QThread()
+        self.map_worker.moveToThread(self.map_thread)
+        self.map_worker.resultReady.connect(self.on_map_ready)
+        self.map_thread.start()
+
+    def has_gps(self):
+        return self.map_worker.has_gps
+
+    def set_selected_laps(self, lap_data, selected_laps):
+        """Update the selected laps and redraw the map"""
+        self.values["lap_data"] = lap_data
+        self.values["selected_laps"] = selected_laps
+
+    def set_wind(self, wind_speed, wind_direction):
+        self.values["wind_speed"] = wind_speed
+        self.values["wind_direction"] = wind_direction
+
+    def set_trim_start(self, start):
+        self.values["trim_start"] = start
+
+    def set_trim_end(self, end):
+        self.values["trim_end"] = end
+
+    def set_marker_pos(self, value):
+        self.values["marker_pos"] = value
+
+    def set_marker_a_pos(self, value):
+        self.set_marker_pos(value)
+
+    def set_marker_b_pos(self, value):
+        self.values["marker_b_pos"] = value
+
+    def set_gate_sets(self, gate_sets, detected_sections):
+        self.values["gate_sets"] = gate_sets
+        self.values["detected_sections"] = detected_sections
+
+    def update(self):
+        if not self.has_gps():
+            return
+        self.map_worker.set_values(self.values)
+
+    def on_map_ready(self, res):
         # Load the HTML into the QWebEngineView
-        html_content = data.getvalue().decode()
-        self.webview.setHtml(html_content)
+        self.webview.setHtml(res)
+
+    def close(self):
+        self.map_thread.quit()
+        self.map_thread.wait()
+

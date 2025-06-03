@@ -151,7 +151,7 @@ class AnalysisResult(QMainWindow):
 
         # Map
         self.map_widget = MapWidget(MapMode.TRIM, self.merged_data, self.params)
-        if self.map_widget.has_gps:
+        if self.map_widget.has_gps():
             self.map_widget.set_trim_start(self.trim_start)
             self.map_widget.set_trim_end(self.trim_end)
             self.map_widget.update()
@@ -777,3 +777,8 @@ class AnalysisResult(QMainWindow):
         self.analysis_window = AnalysisWindow(self.fit_file, self.settings)
         self.analysis_window.show()
         self.close()
+
+    def closeEvent(self, event):
+        self.map_widget.close()
+
+        event.accept()

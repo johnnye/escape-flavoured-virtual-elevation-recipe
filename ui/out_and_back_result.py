@@ -1619,3 +1619,7 @@ class OutAndBackResult(QMainWindow):
         self.analysis_window = AnalysisWindow(self.fit_file, self.settings)
         self.analysis_window.show()
         self.close()
+
+    def closeEvent(self, event):
+        self.map_widget.close()
+        event.accept()
