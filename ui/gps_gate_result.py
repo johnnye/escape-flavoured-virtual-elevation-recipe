@@ -10,8 +10,9 @@ import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt
+from PySide6.QtCore import (Qt, QThread)
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QFormLayout,
     QGroupBox,
@@ -35,7 +36,433 @@ from PySide6.QtWidgets import (
 
 from models.virtual_elevation import VirtualElevation
 from ui.map_widget import (MapWidget, MapMode)
+from ui.async_worker import AsyncWorker
 
+
+class VEWorker(AsyncWorker):
+    INPUT_KEYS = [
+        "trim_start",
+        "trim_end",
+        "current_cda",
+        "current_crr",
+        "detected_sections",
+        "gate_sets",
+    ]
+
+    RESULT_KEYS = [
+        "section_ve_profiles",
+        "section_distances",
+        "all_actual_elevations",
+        "mean_actual_elevations",
+        "detected_sections",
+    ]
+
+    def __init__(self, merged_data, params):
+        super(VEWorker, self).__init__()
+        self.merged_data = merged_data
+        self.params = params
+
+    def _process_value(self, values: dict):
+        for key in VEWorker.INPUT_KEYS:
+            if key in values:
+                setattr(self, key, values[key])
+
+        # Detect sections with new gate positions
+        if values["detect_sections"]:
+            self.detect_sections()
+
+        # Recalculate VE metrics and update plots
+        self.calculate_ve()
+
+        out_values = {}
+        for key in VEWorker.RESULT_KEYS:
+            out_values[key] = getattr(self, key)
+        out_values["detect_sections"] = values["detect_sections"]
+
+        return out_values
+
+    def detect_gate_passings(self, gate_pos, start_time, end_time):
+        """
+        Detect passings of a gate within a time range.
+
+        Returns a list of passings with index, timestamp, distance and direction.
+        """
+
+        # Get valid GPS coordinates
+        valid_coords = self.merged_data.dropna(subset=["position_lat", "position_long"])
+        if valid_coords.empty:
+            return []
+
+        # Get the gate position
+        if gate_pos < 0 or gate_pos >= len(valid_coords):
+            return []
+
+        gate_lat = valid_coords.iloc[gate_pos]["position_lat"]
+        gate_lon = valid_coords.iloc[gate_pos]["position_long"]
+
+        # Calculate distance from each point to the gate
+        from math import atan2, cos, degrees, radians, sin, sqrt
+
+        def haversine(lat1, lon1, lat2, lon2):
+            """Calculate the great circle distance between two points in meters"""
+            R = 6371000  # Earth radius in meters
+            lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+            c = 2 * atan2(sqrt(a), sqrt(1 - a))
+            return R * c
+
+        # Calculate bearing between two points
+        def calculate_bearing(lat1, lon1, lat2, lon2):
+            lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+            y = sin(lon2 - lon1) * cos(lat2)
+            x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(lon2 - lon1)
+            bearing = atan2(y, x)
+            return (degrees(bearing) + 360) % 360
+
+        # Define a threshold for being "at" the gate (e.g., 20 meters)
+        threshold = 20  # meters
+
+        # Calculate smoothed bearings for the entire track
+        bearings = []
+        window_size = 5  # Points to use for smoother bearing calculation
+
+        for i in range(len(valid_coords)):
+            if i < window_size:
+                # For the first points, use forward-looking window
+                if i + window_size < len(valid_coords):
+                    start_lat = valid_coords.iloc[i]["position_lat"]
+                    start_lon = valid_coords.iloc[i]["position_long"]
+                    end_lat = valid_coords.iloc[i + window_size]["position_lat"]
+                    end_lon = valid_coords.iloc[i + window_size]["position_long"]
+                    bearings.append(
+                        calculate_bearing(start_lat, start_lon, end_lat, end_lon)
+                    )
+                else:
+                    # Fallback if we don't have enough points ahead
+                    if i + 1 < len(valid_coords):
+                        start_lat = valid_coords.iloc[i]["position_lat"]
+                        start_lon = valid_coords.iloc[i]["position_long"]
+                        end_lat = valid_coords.iloc[i + 1]["position_lat"]
+                        end_lon = valid_coords.iloc[i + 1]["position_long"]
+                        bearings.append(
+                            calculate_bearing(start_lat, start_lon, end_lat, end_lon)
+                        )
+                    else:
+                        # Just copy the previous bearing if we're at the last point
+                        bearings.append(bearings[-1] if bearings else 0)
+            elif i >= len(valid_coords) - window_size:
+                # For the last points, use backward-looking window
+                start_lat = valid_coords.iloc[i - window_size]["position_lat"]
+                start_lon = valid_coords.iloc[i - window_size]["position_long"]
+                end_lat = valid_coords.iloc[i]["position_lat"]
+                end_lon = valid_coords.iloc[i]["position_long"]
+                bearings.append(
+                    calculate_bearing(start_lat, start_lon, end_lat, end_lon)
+                )
+            else:
+                # For middle points, use points before and after
+                start_lat = valid_coords.iloc[i - window_size // 2]["position_lat"]
+                start_lon = valid_coords.iloc[i - window_size // 2]["position_long"]
+                end_lat = valid_coords.iloc[i + window_size // 2]["position_lat"]
+                end_lon = valid_coords.iloc[i + window_size // 2]["position_long"]
+                bearings.append(
+                    calculate_bearing(start_lat, start_lon, end_lat, end_lon)
+                )
+
+        # Find all points where we pass near the gate within the specified time range
+        passings = []
+        for i in range(start_time, min(end_time + 1, len(valid_coords))):
+            if i >= len(valid_coords):
+                continue
+
+            point_lat = valid_coords.iloc[i]["position_lat"]
+            point_lon = valid_coords.iloc[i]["position_long"]
+
+            distance = haversine(gate_lat, gate_lon, point_lat, point_lon)
+
+            if distance < threshold:
+                direction = bearings[i] if i < len(bearings) else 0
+
+                passings.append(
+                    {
+                        "index": i,
+                        "distance": distance,
+                        "direction": direction,
+                        "timestamp": valid_coords.iloc[i]["timestamp"],
+                    }
+                )
+
+        # Group nearby passings and keep only the closest point for each group
+        grouped_passings = []
+        current_group = []
+
+        for passing in passings:
+            if (
+                not current_group or passing["index"] - current_group[-1]["index"] <= 5
+            ):  # Points within 5 seconds are grouped
+                current_group.append(passing)
+            else:
+                # Find the closest point in the group
+                if current_group:
+                    closest = min(current_group, key=lambda x: x["distance"])
+                    grouped_passings.append(closest)
+                current_group = [passing]
+
+        # Add the last group if it exists
+        if current_group:
+            closest = min(current_group, key=lambda x: x["distance"])
+            grouped_passings.append(closest)
+
+        # Sort by time index
+        grouped_passings.sort(key=lambda x: x["index"])
+
+        return grouped_passings
+
+    def detect_sections(self):
+        """Detect sections based on gate passings with directional awareness"""
+        self.detected_sections = []
+
+        # Process each gate set
+        for gate_set_idx, gate_set in enumerate(self.gate_sets):
+            # Get gate positions
+            gate_a_pos = gate_set["gate_a_pos"]
+            gate_b_pos = gate_set["gate_b_pos"]
+
+            # Determine time bounds for this gate set
+            if gate_set_idx == 0:
+                # First gate set uses trim_start to calibration_end
+                start_bound = self.trim_start
+            else:
+                # Subsequent gate sets use the previous gate B to calibration_end
+                prev_gate_b = self.gate_sets[gate_set_idx - 1]["gate_b_pos"]
+                start_bound = prev_gate_b
+            end_bound = self.trim_end
+
+            # Get passings of gate A in this range
+            gate_a_passings = self.detect_gate_passings(
+                gate_a_pos, start_bound, end_bound
+            )
+
+            # If no gate A passings, skip this gate set
+            if not gate_a_passings:
+                continue
+
+            # First passing of gate A defines the direction
+            first_a_passing = gate_a_passings[0]
+            ref_direction_a = first_a_passing["direction"]
+
+            # Store reference direction in gate set
+            gate_set["direction"] = ref_direction_a
+            gate_set["calibration_point"] = first_a_passing["index"]
+
+            # Track sections from this gate set
+            gate_sections = []
+
+            # Look for gate B passings after each valid A passing
+            for a_passing in gate_a_passings:
+                # Check if this A passing is in the reference direction
+                a_dir_diff = abs(a_passing["direction"] - ref_direction_a)
+                a_dir_diff = min(a_dir_diff, 360 - a_dir_diff)
+
+                if a_dir_diff > 45:  # Not same direction, skip
+                    continue
+
+                # Get gate B passings after this A passing
+                a_time = a_passing["index"]
+                gate_b_passings = self.detect_gate_passings(
+                    gate_b_pos, a_time, end_bound
+                )
+
+                # Find the first B passing in the same direction
+                for b_passing in gate_b_passings:
+                    first_b_passing = gate_b_passings[0]
+                    ref_direction_b = first_b_passing["direction"]
+
+                    b_dir_diff = abs(b_passing["direction"] - ref_direction_b)
+                    b_dir_diff = min(b_dir_diff, 360 - b_dir_diff)
+
+                    if b_dir_diff <= 45:  # Same direction
+                        # Found valid A->B section
+                        section = {
+                            "gate_set": gate_set_idx,
+                            "section_id": f"{gate_set_idx+1}",
+                            "start_idx": a_passing["index"],
+                            "end_idx": b_passing["index"],
+                            "start_time": a_passing["timestamp"],
+                            "end_time": b_passing["timestamp"],
+                            "start_direction": a_passing["direction"],
+                            "end_direction": b_passing["direction"],
+                        }
+
+                        # Calculate duration and distance for this section
+                        section["duration"] = (
+                            section["end_time"] - section["start_time"]
+                        ).total_seconds()
+
+                        # Get distance between points
+                        distance = 0
+                        try:
+                            distance = (
+                                self.merged_data.iloc[b_passing["index"]]["distance"]
+                                - self.merged_data.iloc[a_passing["index"]]["distance"]
+                            ) / 1000  # Convert to km
+                        except (KeyError, IndexError):
+                            # Fallback if distance field isn't available
+                            # Use speed * time approximation
+                            avg_speed = 0
+                            if "speed" in self.merged_data.columns:
+                                speed_values = self.merged_data.iloc[
+                                    a_passing["index"] : b_passing["index"] + 1
+                                ]["speed"].values
+                                if len(speed_values) > 0:
+                                    avg_speed = np.mean(speed_values)
+
+                            distance = (
+                                avg_speed * section["duration"]
+                            ) / 1000  # m/s * s / 1000 = km
+
+                        section["distance"] = max(0, distance)  # Ensure non-negative
+
+                        # Add to detected sections
+                        gate_sections.append(section)
+                        break  # Only use the first valid B passing
+
+            # Store sections in the gate set
+            gate_set["sections"] = gate_sections
+
+            # Add all sections to the master list
+            self.detected_sections.extend(gate_sections)
+
+    def calculate_ve(self):
+        """Calculate virtual elevation for each detected section"""
+        self.section_ve_profiles = []
+        self.section_distances = []
+
+        # Store actual elevation profiles for mean calculation
+        self.all_actual_elevations = (
+            {}
+        )  # Key = gate_set_idx, Value = list of (distances, elevations)
+        self.mean_actual_elevations = (
+            {}
+        )  # Key = gate_set_idx, Value = (distances, mean_elevation)
+
+        if not self.detected_sections:
+            return
+
+        # Check if we have actual elevation data
+        has_elevation = (
+            "altitude" in self.merged_data.columns
+            and not self.merged_data["altitude"].isna().all()
+        )
+
+        # For each detected section, calculate VE
+        for section_idx, section in enumerate(self.detected_sections):
+            gate_set_idx = section["gate_set"]
+            start_idx = section["start_idx"]
+            end_idx = section["end_idx"]
+
+            # Skip invalid indices
+            if (
+                start_idx >= end_idx
+                or start_idx < 0
+                or end_idx >= len(self.merged_data)
+            ):
+                continue
+
+            # Extract section data
+            section_data = self.merged_data.iloc[start_idx : end_idx + 1].copy()
+
+            # Create VE calculator for this section
+            ve_calculator = VirtualElevation(section_data, self.params)
+
+            # Calculate VE
+            ve = ve_calculator.calculate_ve(self.current_cda, self.current_crr)
+
+            # Get distance data
+            if "distance" in section_data.columns:
+                # Use distance directly from FIT file (in meters)
+                distances = section_data["distance"].values
+
+                # Make distances relative to start
+                start_distance = distances[0]
+                distances = distances - start_distance
+
+                # Convert to kilometers
+                distances = distances / 1000
+            else:
+                # Fallback if no distance data
+                distances = np.linspace(0, section["distance"], len(ve))
+
+            # Store section data
+            self.section_ve_profiles.append(ve)
+            self.section_distances.append(distances)
+
+            # If we have elevation data, collect it for mean calculation
+            if has_elevation:
+                # Extract actual elevation for this section
+                actual_elevation = section_data["altitude"].values
+
+                # Store by gate set index for mean calculation
+                if gate_set_idx not in self.all_actual_elevations:
+                    self.all_actual_elevations[gate_set_idx] = []
+
+                self.all_actual_elevations[gate_set_idx].append(
+                    (distances, actual_elevation)
+                )
+
+        # Calculate mean actual elevation profile for each gate set
+        if has_elevation:
+            for gate_set_idx, elevations in self.all_actual_elevations.items():
+                if not elevations:
+                    continue
+
+                # Find max distance for this gate set
+                max_dist = 0
+                for distances, _ in elevations:
+                    if len(distances) > 0:
+                        max_dist = max(max_dist, distances[-1])
+
+                # Create reference distance array (1m intervals)
+                ref_distance_m = np.arange(0, int(max_dist * 1000) + 1, 1)
+                ref_distance_km = ref_distance_m / 1000
+
+                # Arrays for accumulating elevation values
+                elevation_sum = np.zeros_like(ref_distance_m, dtype=float)
+                elevation_count = np.zeros_like(ref_distance_m, dtype=int)
+
+                # Interpolate each elevation profile onto reference distance
+                for distances, elevations in elevations:
+                    # Convert distances to meters for indexing
+                    distances_m = distances * 1000
+
+                    # Interpolate onto reference distances
+                    interp_elevation = np.interp(
+                        ref_distance_m,
+                        distances_m,
+                        elevations,
+                        left=np.nan,
+                        right=np.nan,
+                    )
+
+                    # Add to sum and count non-NaN values
+                    valid_mask = ~np.isnan(interp_elevation)
+                    elevation_sum[valid_mask] += interp_elevation[valid_mask]
+                    elevation_count[valid_mask] += 1
+
+                # Calculate mean elevation
+                mean_elevation = np.zeros_like(ref_distance_m, dtype=float)
+                valid_points = elevation_count > 0
+                mean_elevation[valid_points] = (
+                    elevation_sum[valid_points] / elevation_count[valid_points]
+                )
+
+                # Store mean elevation profile
+                self.mean_actual_elevations[gate_set_idx] = (
+                    ref_distance_km,
+                    mean_elevation,
+                )
 
 class MplCanvas(FigureCanvas):
     """Matplotlib canvas for embedding in Qt"""
@@ -74,8 +501,12 @@ class GPSGateResult(QMainWindow):
         # Prepare merged lap data
         self.prepare_merged_data()
 
-        # Create VE calculator
-        self.ve_calculator = VirtualElevation(self.merged_data, self.params)
+        self.ve_worker = VEWorker(self.merged_data, self.params)
+        self.ve_thread = QThread()
+        self.ve_worker.moveToThread(self.ve_thread)
+        self.ve_worker.resultReady.connect(self.on_ve_result_ready)
+        self.ve_thread.start()
+        QApplication.instance().aboutToQuit.connect(self.join_threads)
 
         # Get lap combination ID for settings
         self.lap_combo_id = "_".join(map(str, sorted(self.selected_laps)))
@@ -135,12 +566,7 @@ class GPSGateResult(QMainWindow):
         # Setup UI
         self.initUI()
 
-        # Detect sections based on gates
-        self.detect_sections()
-
-        # Calculate and plot initial VE
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(True)
 
     def add_gate_set(self):
         """Add a new gate set with default positions"""
@@ -559,9 +985,7 @@ class GPSGateResult(QMainWindow):
             self.update_remove_gate_button()
 
             # Re-detect sections with the updated gate sets
-            self.detect_sections()
-            self.calculate_ve()
-            self.update_plots()
+            self.async_update(True)
 
             self.map_widget.set_gate_sets(self.gate_sets, self.detected_sections)
             self.map_widget.update()
@@ -594,9 +1018,7 @@ class GPSGateResult(QMainWindow):
         """Handle adding a new gate set"""
         if self.add_gate_set():
             self.update_gate_controls()
-            self.detect_sections()
-            self.calculate_ve()
-            self.update_plots()
+            self.async_update(True)
             self.map_widget.set_gate_sets(self.gate_sets, self.detected_sections)
             self.map_widget.update()
 
@@ -627,268 +1049,6 @@ class GPSGateResult(QMainWindow):
             config_text += f"Wind Direction: {self.params.get('wind_direction')}°"
 
         self.config_text.setText(config_text)
-
-    def detect_gate_passings(self, gate_pos, start_time, end_time):
-        """
-        Detect passings of a gate within a time range.
-
-        Returns a list of passings with index, timestamp, distance and direction.
-        """
-        if not self.has_gps:
-            return []
-
-        # Get valid GPS coordinates
-        valid_coords = self.merged_data.dropna(subset=["position_lat", "position_long"])
-        if valid_coords.empty:
-            return []
-
-        # Get the gate position
-        if gate_pos < 0 or gate_pos >= len(valid_coords):
-            return []
-
-        gate_lat = valid_coords.iloc[gate_pos]["position_lat"]
-        gate_lon = valid_coords.iloc[gate_pos]["position_long"]
-
-        # Calculate distance from each point to the gate
-        from math import atan2, cos, degrees, radians, sin, sqrt
-
-        def haversine(lat1, lon1, lat2, lon2):
-            """Calculate the great circle distance between two points in meters"""
-            R = 6371000  # Earth radius in meters
-            lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
-            dlat = lat2 - lat1
-            dlon = lon2 - lon1
-            a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
-            c = 2 * atan2(sqrt(a), sqrt(1 - a))
-            return R * c
-
-        # Calculate bearing between two points
-        def calculate_bearing(lat1, lon1, lat2, lon2):
-            lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
-            y = sin(lon2 - lon1) * cos(lat2)
-            x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(lon2 - lon1)
-            bearing = atan2(y, x)
-            return (degrees(bearing) + 360) % 360
-
-        # Define a threshold for being "at" the gate (e.g., 20 meters)
-        threshold = 20  # meters
-
-        # Calculate smoothed bearings for the entire track
-        bearings = []
-        window_size = 5  # Points to use for smoother bearing calculation
-
-        for i in range(len(valid_coords)):
-            if i < window_size:
-                # For the first points, use forward-looking window
-                if i + window_size < len(valid_coords):
-                    start_lat = valid_coords.iloc[i]["position_lat"]
-                    start_lon = valid_coords.iloc[i]["position_long"]
-                    end_lat = valid_coords.iloc[i + window_size]["position_lat"]
-                    end_lon = valid_coords.iloc[i + window_size]["position_long"]
-                    bearings.append(
-                        calculate_bearing(start_lat, start_lon, end_lat, end_lon)
-                    )
-                else:
-                    # Fallback if we don't have enough points ahead
-                    if i + 1 < len(valid_coords):
-                        start_lat = valid_coords.iloc[i]["position_lat"]
-                        start_lon = valid_coords.iloc[i]["position_long"]
-                        end_lat = valid_coords.iloc[i + 1]["position_lat"]
-                        end_lon = valid_coords.iloc[i + 1]["position_long"]
-                        bearings.append(
-                            calculate_bearing(start_lat, start_lon, end_lat, end_lon)
-                        )
-                    else:
-                        # Just copy the previous bearing if we're at the last point
-                        bearings.append(bearings[-1] if bearings else 0)
-            elif i >= len(valid_coords) - window_size:
-                # For the last points, use backward-looking window
-                start_lat = valid_coords.iloc[i - window_size]["position_lat"]
-                start_lon = valid_coords.iloc[i - window_size]["position_long"]
-                end_lat = valid_coords.iloc[i]["position_lat"]
-                end_lon = valid_coords.iloc[i]["position_long"]
-                bearings.append(
-                    calculate_bearing(start_lat, start_lon, end_lat, end_lon)
-                )
-            else:
-                # For middle points, use points before and after
-                start_lat = valid_coords.iloc[i - window_size // 2]["position_lat"]
-                start_lon = valid_coords.iloc[i - window_size // 2]["position_long"]
-                end_lat = valid_coords.iloc[i + window_size // 2]["position_lat"]
-                end_lon = valid_coords.iloc[i + window_size // 2]["position_long"]
-                bearings.append(
-                    calculate_bearing(start_lat, start_lon, end_lat, end_lon)
-                )
-
-        # Find all points where we pass near the gate within the specified time range
-        passings = []
-        for i in range(start_time, min(end_time + 1, len(valid_coords))):
-            if i >= len(valid_coords):
-                continue
-
-            point_lat = valid_coords.iloc[i]["position_lat"]
-            point_lon = valid_coords.iloc[i]["position_long"]
-
-            distance = haversine(gate_lat, gate_lon, point_lat, point_lon)
-
-            if distance < threshold:
-                direction = bearings[i] if i < len(bearings) else 0
-
-                passings.append(
-                    {
-                        "index": i,
-                        "distance": distance,
-                        "direction": direction,
-                        "timestamp": valid_coords.iloc[i]["timestamp"],
-                    }
-                )
-
-        # Group nearby passings and keep only the closest point for each group
-        grouped_passings = []
-        current_group = []
-
-        for passing in passings:
-            if (
-                not current_group or passing["index"] - current_group[-1]["index"] <= 5
-            ):  # Points within 5 seconds are grouped
-                current_group.append(passing)
-            else:
-                # Find the closest point in the group
-                if current_group:
-                    closest = min(current_group, key=lambda x: x["distance"])
-                    grouped_passings.append(closest)
-                current_group = [passing]
-
-        # Add the last group if it exists
-        if current_group:
-            closest = min(current_group, key=lambda x: x["distance"])
-            grouped_passings.append(closest)
-
-        # Sort by time index
-        grouped_passings.sort(key=lambda x: x["index"])
-
-        return grouped_passings
-
-    def detect_sections(self):
-        """Detect sections based on gate passings with directional awareness"""
-        self.detected_sections = []
-
-        if not self.has_gps or not self.gate_sets:
-            return
-
-        # Process each gate set
-        for gate_set_idx, gate_set in enumerate(self.gate_sets):
-            # Get gate positions
-            gate_a_pos = gate_set["gate_a_pos"]
-            gate_b_pos = gate_set["gate_b_pos"]
-
-            # Determine time bounds for this gate set
-            if gate_set_idx == 0:
-                # First gate set uses trim_start to calibration_end
-                start_bound = self.trim_start
-            else:
-                # Subsequent gate sets use the previous gate B to calibration_end
-                prev_gate_b = self.gate_sets[gate_set_idx - 1]["gate_b_pos"]
-                start_bound = prev_gate_b
-            end_bound = self.trim_end
-
-            # Get passings of gate A in this range
-            gate_a_passings = self.detect_gate_passings(
-                gate_a_pos, start_bound, end_bound
-            )
-
-            # If no gate A passings, skip this gate set
-            if not gate_a_passings:
-                continue
-
-            # First passing of gate A defines the direction
-            first_a_passing = gate_a_passings[0]
-            ref_direction_a = first_a_passing["direction"]
-
-            # Store reference direction in gate set
-            gate_set["direction"] = ref_direction_a
-            gate_set["calibration_point"] = first_a_passing["index"]
-
-            # Track sections from this gate set
-            gate_sections = []
-
-            # Look for gate B passings after each valid A passing
-            for a_passing in gate_a_passings:
-                # Check if this A passing is in the reference direction
-                a_dir_diff = abs(a_passing["direction"] - ref_direction_a)
-                a_dir_diff = min(a_dir_diff, 360 - a_dir_diff)
-
-                if a_dir_diff > 45:  # Not same direction, skip
-                    continue
-
-                # Get gate B passings after this A passing
-                a_time = a_passing["index"]
-                gate_b_passings = self.detect_gate_passings(
-                    gate_b_pos, a_time, end_bound
-                )
-
-                # Find the first B passing in the same direction
-                for b_passing in gate_b_passings:
-                    first_b_passing = gate_b_passings[0]
-                    ref_direction_b = first_b_passing["direction"]
-
-                    b_dir_diff = abs(b_passing["direction"] - ref_direction_b)
-                    b_dir_diff = min(b_dir_diff, 360 - b_dir_diff)
-
-                    if b_dir_diff <= 45:  # Same direction
-                        # Found valid A->B section
-                        section = {
-                            "gate_set": gate_set_idx,
-                            "section_id": f"{gate_set_idx+1}",
-                            "start_idx": a_passing["index"],
-                            "end_idx": b_passing["index"],
-                            "start_time": a_passing["timestamp"],
-                            "end_time": b_passing["timestamp"],
-                            "start_direction": a_passing["direction"],
-                            "end_direction": b_passing["direction"],
-                        }
-
-                        # Calculate duration and distance for this section
-                        section["duration"] = (
-                            section["end_time"] - section["start_time"]
-                        ).total_seconds()
-
-                        # Get distance between points
-                        distance = 0
-                        try:
-                            distance = (
-                                self.merged_data.iloc[b_passing["index"]]["distance"]
-                                - self.merged_data.iloc[a_passing["index"]]["distance"]
-                            ) / 1000  # Convert to km
-                        except (KeyError, IndexError):
-                            # Fallback if distance field isn't available
-                            # Use speed * time approximation
-                            avg_speed = 0
-                            if "speed" in self.merged_data.columns:
-                                speed_values = self.merged_data.iloc[
-                                    a_passing["index"] : b_passing["index"] + 1
-                                ]["speed"].values
-                                if len(speed_values) > 0:
-                                    avg_speed = np.mean(speed_values)
-
-                            distance = (
-                                avg_speed * section["duration"]
-                            ) / 1000  # m/s * s / 1000 = km
-
-                        section["distance"] = max(0, distance)  # Ensure non-negative
-
-                        # Add to detected sections
-                        gate_sections.append(section)
-                        break  # Only use the first valid B passing
-
-            # Store sections in the gate set
-            gate_set["sections"] = gate_sections
-
-            # Add all sections to the master list
-            self.detected_sections.extend(gate_sections)
-
-        # Update the section table
-        self.update_section_table()
 
     def update_section_table(self):
         """Update the section table with detected sections"""
@@ -945,135 +1105,6 @@ class GPSGateResult(QMainWindow):
                 selected_indices.append(row)
 
         return selected_indices
-
-    def calculate_ve(self):
-        """Calculate virtual elevation for each detected section"""
-        self.section_ve_profiles = []
-        self.section_distances = []
-
-        # Store actual elevation profiles for mean calculation
-        self.all_actual_elevations = (
-            {}
-        )  # Key = gate_set_idx, Value = list of (distances, elevations)
-        self.mean_actual_elevations = (
-            {}
-        )  # Key = gate_set_idx, Value = (distances, mean_elevation)
-
-        if not self.detected_sections:
-            return
-
-        # Check if we have actual elevation data
-        has_elevation = (
-            "altitude" in self.merged_data.columns
-            and not self.merged_data["altitude"].isna().all()
-        )
-
-        # For each detected section, calculate VE
-        for section_idx, section in enumerate(self.detected_sections):
-            gate_set_idx = section["gate_set"]
-            start_idx = section["start_idx"]
-            end_idx = section["end_idx"]
-
-            # Skip invalid indices
-            if (
-                start_idx >= end_idx
-                or start_idx < 0
-                or end_idx >= len(self.merged_data)
-            ):
-                continue
-
-            # Extract section data
-            section_data = self.merged_data.iloc[start_idx : end_idx + 1].copy()
-
-            # Create VE calculator for this section
-            ve_calculator = VirtualElevation(section_data, self.params)
-
-            # Calculate VE
-            ve = ve_calculator.calculate_ve(self.current_cda, self.current_crr)
-
-            # Get distance data
-            if "distance" in section_data.columns:
-                # Use distance directly from FIT file (in meters)
-                distances = section_data["distance"].values
-
-                # Make distances relative to start
-                start_distance = distances[0]
-                distances = distances - start_distance
-
-                # Convert to kilometers
-                distances = distances / 1000
-            else:
-                # Fallback if no distance data
-                distances = np.linspace(0, section["distance"], len(ve))
-
-            # Store section data
-            self.section_ve_profiles.append(ve)
-            self.section_distances.append(distances)
-
-            # If we have elevation data, collect it for mean calculation
-            if has_elevation:
-                # Extract actual elevation for this section
-                actual_elevation = section_data["altitude"].values
-
-                # Store by gate set index for mean calculation
-                if gate_set_idx not in self.all_actual_elevations:
-                    self.all_actual_elevations[gate_set_idx] = []
-
-                self.all_actual_elevations[gate_set_idx].append(
-                    (distances, actual_elevation)
-                )
-
-        # Calculate mean actual elevation profile for each gate set
-        if has_elevation:
-            for gate_set_idx, elevations in self.all_actual_elevations.items():
-                if not elevations:
-                    continue
-
-                # Find max distance for this gate set
-                max_dist = 0
-                for distances, _ in elevations:
-                    if len(distances) > 0:
-                        max_dist = max(max_dist, distances[-1])
-
-                # Create reference distance array (1m intervals)
-                ref_distance_m = np.arange(0, int(max_dist * 1000) + 1, 1)
-                ref_distance_km = ref_distance_m / 1000
-
-                # Arrays for accumulating elevation values
-                elevation_sum = np.zeros_like(ref_distance_m, dtype=float)
-                elevation_count = np.zeros_like(ref_distance_m, dtype=int)
-
-                # Interpolate each elevation profile onto reference distance
-                for distances, elevations in elevations:
-                    # Convert distances to meters for indexing
-                    distances_m = distances * 1000
-
-                    # Interpolate onto reference distances
-                    interp_elevation = np.interp(
-                        ref_distance_m,
-                        distances_m,
-                        elevations,
-                        left=np.nan,
-                        right=np.nan,
-                    )
-
-                    # Add to sum and count non-NaN values
-                    valid_mask = ~np.isnan(interp_elevation)
-                    elevation_sum[valid_mask] += interp_elevation[valid_mask]
-                    elevation_count[valid_mask] += 1
-
-                # Calculate mean elevation
-                mean_elevation = np.zeros_like(ref_distance_m, dtype=float)
-                valid_points = elevation_count > 0
-                mean_elevation[valid_points] = (
-                    elevation_sum[valid_points] / elevation_count[valid_points]
-                )
-
-                # Store mean elevation profile
-                self.mean_actual_elevations[gate_set_idx] = (
-                    ref_distance_km,
-                    mean_elevation,
-                )
 
     def update_plots(self):
         """Update the virtual elevation plots"""
@@ -1348,7 +1379,7 @@ class GPSGateResult(QMainWindow):
             )
 
         self.fig_canvas.fig.tight_layout()
-        self.fig_canvas.draw()
+        self.fig_canvas.draw_idle()
 
     def on_gate_a_changed(self, gate_index, value):
         """Handle Gate A slider value change"""
@@ -1379,19 +1410,11 @@ class GPSGateResult(QMainWindow):
                     self.gate_controls[i].gate_b_slider.setValue(next_b_pos)
                     self.gate_controls[i].gate_b_label.setText(f"{next_b_pos} s")
 
-        # Detect sections with new gate positions
-        self.detect_sections()
-
-        # Calculate VE for new sections
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(True)
 
         # Update map
         self.map_widget.set_gate_sets(self.gate_sets, self.detected_sections)
         self.map_widget.update()
-
-        # Update control min/max values
-        self.update_gate_controls()
 
     def on_gate_b_changed(self, gate_index, value):
         """Handle Gate B slider value change"""
@@ -1420,19 +1443,11 @@ class GPSGateResult(QMainWindow):
                     self.gate_controls[i].gate_b_slider.setValue(next_b_pos)
                     self.gate_controls[i].gate_b_label.setText(f"{next_b_pos} s")
 
-        # Detect sections with new gate positions
-        self.detect_sections()
-
-        # Calculate VE for new sections
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(True)
 
         # Update map
         self.map_widget.set_gate_sets(self.gate_sets, self.detected_sections)
         self.map_widget.update()
-
-        # Update control min/max values
-        self.update_gate_controls()
 
     def on_trim_start_changed(self, value):
         """Handle trim start slider value change"""
@@ -1458,20 +1473,12 @@ class GPSGateResult(QMainWindow):
                     gate_control.gate_b_slider.setValue(value + 1)
                     gate_control.gate_b_label.setText(f"{value + 1} s")
 
-        # Detect sections based on new trim values
-        self.detect_sections()
-
-        # Recalculate VE metrics and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(True)
 
         # Update map to show trim points
         self.map_widget.set_trim_start(self.trim_start)
         self.map_widget.set_gate_sets(self.gate_sets, self.detected_sections)
         self.map_widget.update()
-
-        # Update all gate controls
-        self.update_gate_controls()
 
     def on_trim_end_changed(self, value):
         """Handle trim end slider value change"""
@@ -1497,29 +1504,20 @@ class GPSGateResult(QMainWindow):
                     gate_control.gate_a_slider.setValue(value - 1)
                     gate_control.gate_a_label.setText(f"{value - 1} s")
 
-        # Detect sections based on new trim values
-        self.detect_sections()
-
         # Recalculate VE metrics and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(True)
 
         # Update map to show trim points
         self.map_widget.set_trim_end(self.trim_end)
         self.map_widget.set_gate_sets(self.gate_sets, self.detected_sections)
         self.map_widget.update()
 
-        # Update all gate controls
-        self.update_gate_controls()
-
     def on_cda_changed(self, value):
         """Handle CdA slider value change"""
         self.current_cda = value / 1000.0
         self.cda_label.setText(f"{self.current_cda:.3f}")
 
-        # Recalculate VE and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(False)
         self.update_config_text()
 
     def on_crr_changed(self, value):
@@ -1528,8 +1526,7 @@ class GPSGateResult(QMainWindow):
         self.crr_label.setText(f"{self.current_crr:.4f}")
 
         # Recalculate VE and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(False)
         self.update_config_text()
 
     def make_json_serializable(self, obj):
@@ -1728,6 +1725,37 @@ class GPSGateResult(QMainWindow):
         self.parent.show()
         self.close()
 
+    def async_update(self, detect_sections):
+        values = {}
+        for key in VEWorker.INPUT_KEYS:
+            values[key] = getattr(self, key)
+        values["detect_sections"] = detect_sections and self.has_gps and self.gate_sets
+
+        self.ve_worker.set_values(values)
+
+    def on_ve_result_ready(self, res):
+        for key in VEWorker.RESULT_KEYS:
+            if key in res:
+                setattr(self, key, res[key])
+
+        if res["detect_sections"]:
+            # Update the section table
+            self.update_section_table()
+            # Update control min/max values
+            self.update_gate_controls()
+
+        self.update_plots()
+
+    def join_threads(self):
+        if self.map_widget:
+            self.map_widget.close()
+            self.map_widget = None
+        if self.ve_thread:
+            self.ve_thread.quit()
+            self.ve_thread.wait()
+            self.ve_thread = None
+
     def closeEvent(self, event):
-        self.map_widget.close()
+        self.join_threads()
+
         event.accept()
