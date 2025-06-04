@@ -383,7 +383,7 @@ class AnalysisWindow(QMainWindow):
                 # Standard analysis without auto lap detection
                 from ui.analysis_result import AnalysisResult
 
-                self.analysis_result_window = AnalysisResult(
+                self.analysis_result_window = AnalysisResult(self,
                     self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.analysis_result_window.show()
@@ -392,7 +392,7 @@ class AnalysisWindow(QMainWindow):
                 # GPS based lap splitting
                 from ui.gps_lap_result import GPSLapResult
 
-                self.gps_lap_result_window = GPSLapResult(
+                self.gps_lap_result_window = GPSLapResult(self,
                     self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.gps_lap_result_window.show()
@@ -401,7 +401,7 @@ class AnalysisWindow(QMainWindow):
                 # GPS based out and back analysis
                 from ui.out_and_back_result import OutAndBackResult
 
-                self.out_and_back_result_window = OutAndBackResult(
+                self.out_and_back_result_window = OutAndBackResult(self,
                     self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.out_and_back_result_window.show()
@@ -410,7 +410,7 @@ class AnalysisWindow(QMainWindow):
                 # GPS gate one way analysis
                 from ui.gps_gate_result import GPSGateResult
 
-                self.gps_gate_result_window = GPSGateResult(
+                self.gps_gate_result_window = GPSGateResult(self,
                     self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.gps_gate_result_window.show()
