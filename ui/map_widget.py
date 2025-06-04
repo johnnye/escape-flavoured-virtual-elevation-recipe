@@ -48,6 +48,7 @@ class MapWorker(AsyncWorker):
         self.detected_sections = []
         self.gate_sets = []
         self.mode = mode
+        self.first_update = True
 
     def map_time_to_route_index(self, time_index):
         """
@@ -695,7 +696,9 @@ class MapWorker(AsyncWorker):
         # Create a folium map
 
         # Create map centered on activity
-        m = folium.Map(location=[self.center_lat, self.center_lon], zoom_start=12)
+        zoom_start = 12 if self.first_update else 0
+        self.first_update = False
+        m = folium.Map(location=[self.center_lat, self.center_lon], zoom_start=zoom_start)
 
         # If no laps are selected, draw the full track as solid blue
         if (self.mode == MapMode.TRIM
