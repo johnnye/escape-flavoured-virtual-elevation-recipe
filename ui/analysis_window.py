@@ -4,6 +4,7 @@ from datetime import timedelta
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -33,6 +34,7 @@ class AnalysisWindow(QMainWindow):
         self.file_settings = settings.get_file_settings(fit_file.filename)
         self.selected_laps = []
         self.initUI()
+        QApplication.instance().aboutToQuit.connect(self.join_threads)
 
     def initUI(self):
         self.setWindowTitle(
@@ -490,6 +492,10 @@ class AnalysisWindow(QMainWindow):
             self.map_widget.set_wind(wind_speed, wind_direction)
             self.map_widget.update()
 
+    def join_threads(self):
+        if self.map_widget:
+            self.map_widget.close()
+
     def closeEvent(self, event):
-        self.map_widget.close()
+        self.join_threads()
         event.accept()
