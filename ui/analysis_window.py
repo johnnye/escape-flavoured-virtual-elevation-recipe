@@ -4,6 +4,7 @@ from datetime import timedelta
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -22,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ui.map_widget import MapWidget
+from ui.map_widget import (MapWidget, MapMode)
 
 
 class AnalysisWindow(QMainWindow):
@@ -33,6 +34,7 @@ class AnalysisWindow(QMainWindow):
         self.file_settings = settings.get_file_settings(fit_file.filename)
         self.selected_laps = []
         self.initUI()
+        QApplication.instance().aboutToQuit.connect(self.join_threads)
 
     def initUI(self):
         self.setWindowTitle(
@@ -51,8 +53,10 @@ class AnalysisWindow(QMainWindow):
         left_layout = QVBoxLayout()
 
         # Add map widget if GPS data is available
-        if self.fit_file.has_gps:
-            self.map_widget = MapWidget(self.fit_file, self.settings)
+        self.map_widget = MapWidget(MapMode.LAPS, self.fit_file.resampled_df,
+                                    self.file_settings)
+        if self.map_widget.has_gps():
+            self.map_widget.update()
             left_layout.addWidget(self.map_widget, 2)
         else:
             no_gps_label = QLabel("No GPS data available in this FIT file")
@@ -274,8 +278,10 @@ class AnalysisWindow(QMainWindow):
         self.analyze_button.setEnabled(len(self.selected_laps) > 0)
 
         # Update the map to show selected laps
-        if hasattr(self, "map_widget") and self.fit_file.has_gps:
-            self.map_widget.set_selected_laps(self.selected_laps)
+        if self.fit_file.has_gps:
+            self.map_widget.set_selected_laps(self.fit_file.get_lap_data(),
+                                              self.selected_laps)
+            self.map_widget.update()
 
     def toggle_lap_selection(self):
         """Select or deselect all laps"""
@@ -377,7 +383,7 @@ class AnalysisWindow(QMainWindow):
                 # Standard analysis without auto lap detection
                 from ui.analysis_result import AnalysisResult
 
-                self.analysis_result_window = AnalysisResult(
+                self.analysis_result_window = AnalysisResult(self,
                     self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.analysis_result_window.show()
@@ -386,7 +392,7 @@ class AnalysisWindow(QMainWindow):
                 # GPS based lap splitting
                 from ui.gps_lap_result import GPSLapResult
 
-                self.gps_lap_result_window = GPSLapResult(
+                self.gps_lap_result_window = GPSLapResult(self,
                     self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.gps_lap_result_window.show()
@@ -395,7 +401,7 @@ class AnalysisWindow(QMainWindow):
                 # GPS based out and back analysis
                 from ui.out_and_back_result import OutAndBackResult
 
-                self.out_and_back_result_window = OutAndBackResult(
+                self.out_and_back_result_window = OutAndBackResult(self,
                     self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.out_and_back_result_window.show()
@@ -404,7 +410,7 @@ class AnalysisWindow(QMainWindow):
                 # GPS gate one way analysis
                 from ui.gps_gate_result import GPSGateResult
 
-                self.gps_gate_result_window = GPSGateResult(
+                self.gps_gate_result_window = GPSGateResult(self,
                     self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.gps_gate_result_window.show()
@@ -482,5 +488,14 @@ class AnalysisWindow(QMainWindow):
         self.settings.save_file_settings(self.fit_file.filename, self.file_settings)
 
         # Refresh the map if it exists
-        if hasattr(self, "map_widget") and self.fit_file.has_gps:
-            self.map_widget.create_map()
+        if self.fit_file.has_gps:
+            self.map_widget.set_wind(wind_speed, wind_direction)
+            self.map_widget.update()
+
+    def join_threads(self):
+        if self.map_widget:
+            self.map_widget.close()
+
+    def closeEvent(self, event):
+        self.join_threads()
+        event.accept()

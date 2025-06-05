@@ -10,9 +10,12 @@ import folium
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt
-from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtCore import (
+    Qt,
+    QThread,
+)
 from PySide6.QtWidgets import (
+    QApplication,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -30,7 +33,138 @@ from PySide6.QtWidgets import (
 )
 
 from models.virtual_elevation import VirtualElevation
+from ui.map_widget import (MapWidget, MapMode)
+from ui.async_worker import AsyncWorker
 
+class VEWorker(AsyncWorker):
+    INPUT_KEYS = [
+        "trim_start",
+        "trim_end",
+        "current_cda",
+        "current_crr"
+    ]
+
+    RESULT_KEYS = [
+        "actual_elevation",
+        "actual_elevation_diff",
+        "distance",
+        "r2",
+        "rmse",
+        "ve_elevation_diff",
+        "virtual_elevation_calibrated",
+        "virtual_elevation",
+    ]
+
+    def __init__(self, merged_data, params):
+        super(VEWorker, self).__init__()
+        self.merged_data = merged_data
+        # Create VE calculator
+        self.ve_calculator = VirtualElevation(self.merged_data, params)
+
+    def _process_value(self, values: dict):
+        for key in VEWorker.INPUT_KEYS:
+            setattr(self, key, values[key])
+
+        self.calculate_ve()
+        self.prepare_plots()
+
+        out_values = {}
+        for key in VEWorker.RESULT_KEYS:
+            out_values[key] = getattr(self, key)
+
+        return out_values
+
+    def calculate_ve(self):
+        """Calculate virtual elevation with current parameters"""
+        # Extract actual elevation if available
+        self.actual_elevation = None
+        if (
+            "altitude" in self.merged_data.columns
+            and not self.merged_data["altitude"].isna().all()
+        ):
+            self.actual_elevation = self.merged_data["altitude"].values
+
+        # Calculate virtual elevation
+        self.virtual_elevation = self.ve_calculator.calculate_ve(
+            self.current_cda, self.current_crr
+        )
+
+        # Calculate metrics
+        if self.actual_elevation is not None:
+            # Ensure same length
+            min_len = min(len(self.virtual_elevation), len(self.actual_elevation))
+            ve_trim = self.virtual_elevation[:min_len]
+            elev_trim = self.actual_elevation[:min_len]
+
+            # Calibrate to match at trim start
+            trim_start_idx = self.trim_start
+            if trim_start_idx < min_len:
+                # Calculate offset to make virtual elevation match actual at trim start
+                offset = elev_trim[trim_start_idx] - ve_trim[trim_start_idx]
+                ve_calibrated = ve_trim + offset
+                self.virtual_elevation_calibrated = ve_calibrated
+            else:
+                self.virtual_elevation_calibrated = ve_trim
+
+            # Calculate metrics in trimmed region
+            trim_indices = np.where(
+                (np.arange(len(ve_trim)) >= self.trim_start)
+                & (np.arange(len(ve_trim)) <= self.trim_end)
+            )[0]
+
+            if len(trim_indices) > 2:  # Need at least 3 points for correlation
+                ve_trim_region = self.virtual_elevation_calibrated[trim_indices]
+                elev_trim_region = elev_trim[trim_indices]
+
+                # R² calculation
+                corr = np.corrcoef(ve_trim_region, elev_trim_region)[0, 1]
+                self.r2 = corr**2
+
+                # RMSE calculation
+                self.rmse = np.sqrt(np.mean((ve_trim_region - elev_trim_region) ** 2))
+
+                # Calculate elevation gain (difference between end and start)
+                # Make sure we don't exceed array bounds
+                safe_trim_end = min(self.trim_end, len(ve_trim) - 1)
+                safe_trim_start = min(self.trim_start, safe_trim_end)
+
+                # Elevation differences
+                self.ve_elevation_diff = (
+                    ve_calibrated[safe_trim_end] - ve_calibrated[safe_trim_start]
+                )
+                self.actual_elevation_diff = (
+                    elev_trim[safe_trim_end] - elev_trim[safe_trim_start]
+                )
+            else:
+                self.r2 = 0
+                self.rmse = 0
+                self.ve_elevation_diff = 0
+                self.actual_elevation_diff = 0
+        else:
+            # If no actual elevation data, still create a calibrated version
+            self.virtual_elevation_calibrated = self.virtual_elevation.copy()
+            self.ve_elevation_diff = (
+                self.virtual_elevation_calibrated[
+                    min(self.trim_end, len(self.virtual_elevation_calibrated) - 1)
+                ]
+                - self.virtual_elevation_calibrated[
+                    min(self.trim_start, len(self.virtual_elevation_calibrated) - 1)
+                ]
+            )
+
+    def prepare_plots(self):
+        # Use recorded distance from FIT file (convert to km) and reset to start from 0
+        if 'distance' in self.merged_data.columns and not self.merged_data['distance'].isna().all():
+            # Use recorded distance from FIT file (in meters), reset to start from 0, convert to km
+            distance_raw = self.merged_data['distance'].values
+            self.distance = (distance_raw - distance_raw[0]) / 1000  # Reset to 0 and convert to km
+        elif hasattr(self.ve_calculator, 'df') and 'v' in self.ve_calculator.df.columns:
+            # Fallback: calculate cumulative distance from speed (v is in m/s, dt=1s)
+            distance_m = np.cumsum(self.ve_calculator.df['v'].values * self.ve_calculator.dt)
+            self.distance = distance_m / 1000  # Convert to km
+        else:
+            # Final fallback to time-based if no distance or speed data
+            self.distance = np.arange(len(self.virtual_elevation)) / 1000
 
 class MplCanvas(FigureCanvas):
     """Matplotlib canvas for embedding in Qt"""
@@ -47,8 +181,9 @@ class MplCanvas(FigureCanvas):
 class AnalysisResult(QMainWindow):
     """Window for displaying virtual elevation analysis results"""
 
-    def __init__(self, fit_file, settings, selected_laps, params):
+    def __init__(self, parent, fit_file, settings, selected_laps, params):
         super().__init__()
+        self.parent = parent
         self.fit_file = fit_file
         self.settings = settings
         self.selected_laps = selected_laps
@@ -58,8 +193,12 @@ class AnalysisResult(QMainWindow):
         # Prepare merged lap data
         self.prepare_merged_data()
 
-        # Create VE calculator
-        self.ve_calculator = VirtualElevation(self.merged_data, self.params)
+        self.ve_worker = VEWorker(self.merged_data, self.params)
+        self.ve_thread = QThread()
+        self.ve_worker.moveToThread(self.ve_thread)
+        self.ve_worker.resultReady.connect(self.on_ve_result_ready)
+        self.ve_thread.start()
+        QApplication.instance().aboutToQuit.connect(self.join_threads)
 
         # Get lap combination ID for settings
         self.lap_combo_id = "_".join(map(str, sorted(self.selected_laps)))
@@ -102,9 +241,7 @@ class AnalysisResult(QMainWindow):
         # Setup UI
         self.initUI()
 
-        # Calculate and plot initial VE
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update()
 
     def prepare_merged_data(self):
         """Extract and merge data for selected laps"""
@@ -131,38 +268,6 @@ class AnalysisResult(QMainWindow):
             self.total_distance / self.total_duration
         ) * 3600  # Convert to km/h
 
-        # Extract GPS coordinates for map
-        if (
-            "position_lat" in self.merged_data.columns
-            and "position_long" in self.merged_data.columns
-        ):
-            self.has_gps = True
-            # Filter out missing coordinates
-            valid_coords = self.merged_data.dropna(
-                subset=["position_lat", "position_long"]
-            )
-            if not valid_coords.empty:
-                self.start_lat = valid_coords["position_lat"].iloc[0]
-                self.start_lon = valid_coords["position_long"].iloc[0]
-                self.end_lat = valid_coords["position_lat"].iloc[-1]
-                self.end_lon = valid_coords["position_long"].iloc[-1]
-
-                # Extract all route points
-                self.route_points = list(
-                    zip(valid_coords["position_lat"], valid_coords["position_long"])
-                )
-
-                # Store the timestamps to ensure correct mapping of trim indices to route points
-                self.route_timestamps = valid_coords["timestamp"].tolist()
-
-                # Initial trim values should correspond to the valid coordinates
-                self.trim_start = 0
-                self.trim_end = len(self.route_points) - 1
-            else:
-                self.has_gps = False
-        else:
-            self.has_gps = False
-
     def initUI(self):
         """Initialize the UI components"""
         self.setWindowTitle(
@@ -182,9 +287,11 @@ class AnalysisResult(QMainWindow):
         left_layout = QVBoxLayout(left_widget)
 
         # Map
-        if self.has_gps:
-            self.map_widget = QWebEngineView()
-            self.create_map()
+        self.map_widget = MapWidget(MapMode.TRIM, self.merged_data, self.params)
+        if self.map_widget.has_gps():
+            self.map_widget.set_trim_start(self.trim_start)
+            self.map_widget.set_trim_end(self.trim_end)
+            self.map_widget.update()
             left_layout.addWidget(self.map_widget, 2)
         else:
             no_gps_label = QLabel("No GPS data available")
@@ -316,169 +423,6 @@ class AnalysisResult(QMainWindow):
         main_widget.setLayout(main_layout)
         self.setCentralWidget(main_widget)
 
-    def create_map(self):
-        """Create the map showing the merged track with start/end markers and trimmed portion"""
-        if not self.has_gps or not self.route_points:
-            return
-
-        # Calculate center point
-        center_lat = (self.start_lat + self.end_lat) / 2
-        center_lon = (self.start_lon + self.end_lon) / 2
-
-        # Create map
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=12)
-
-        # Track styling:
-        # 1. First draw parts before trim_start and after trim_end with dashed opacity
-        # 2. Then draw the selected portion with solid blue
-
-        try:
-            # Map time indices to route indices
-            if not hasattr(self, "route_timestamps") or not self.route_timestamps:
-                # Fall back to simple index mapping if no timestamps available
-                total_points = len(self.route_points)
-                total_records = len(self.merged_data)
-
-                if total_points > 0 and total_records > 0:
-                    route_trim_start = min(
-                        int(self.trim_start * total_points / total_records),
-                        total_points - 1,
-                    )
-                    route_trim_end = min(
-                        int(self.trim_end * total_points / total_records),
-                        total_points - 1,
-                    )
-                else:
-                    route_trim_start = 0
-                    route_trim_end = len(self.route_points) - 1
-            else:
-                # Map using timestamps
-                route_trim_start = self.map_time_to_route_index(self.trim_start)
-                route_trim_end = self.map_time_to_route_index(self.trim_end)
-
-                # Fall back if mapping fails
-                if route_trim_start is None or route_trim_end is None:
-                    total_points = len(self.route_points)
-                    total_records = len(self.merged_data)
-
-                    if total_points > 0 and total_records > 0:
-                        route_trim_start = min(
-                            int(self.trim_start * total_points / total_records),
-                            total_points - 1,
-                        )
-                        route_trim_end = min(
-                            int(self.trim_end * total_points / total_records),
-                            total_points - 1,
-                        )
-                    else:
-                        route_trim_start = 0
-                        route_trim_end = len(self.route_points) - 1
-
-            # Make sure indices are valid
-            route_trim_start = max(0, min(route_trim_start, len(self.route_points) - 1))
-            route_trim_end = max(
-                route_trim_start, min(route_trim_end, len(self.route_points) - 1)
-            )
-
-            # 1. Draw the parts before trim_start with dashed blue line (if exists)
-            if route_trim_start > 0:
-                pre_trim_route = self.route_points[: route_trim_start + 1]
-                folium.PolyLine(
-                    pre_trim_route,
-                    color="#4363d8",  # Blue color
-                    weight=3,
-                    opacity=0.5,
-                    dash_array="5,10",  # Dashed line
-                    popup="Pre-selected portion",
-                ).add_to(m)
-
-            # 2. Draw the parts after trim_end with dashed blue line (if exists)
-            if route_trim_end < len(self.route_points) - 1:
-                post_trim_route = self.route_points[route_trim_end:]
-                folium.PolyLine(
-                    post_trim_route,
-                    color="#4363d8",  # Blue color
-                    weight=3,
-                    opacity=0.5,
-                    dash_array="5,10",  # Dashed line
-                    popup="Post-selected portion",
-                ).add_to(m)
-
-            # 3. Draw the selected portion with solid blue line
-            trimmed_route = self.route_points[route_trim_start : route_trim_end + 1]
-            if len(trimmed_route) > 1:
-                folium.PolyLine(
-                    trimmed_route,
-                    color="#4363d8",  # Blue color
-                    weight=5,  # Slightly thicker
-                    opacity=1.0,  # Full opacity
-                    popup="Selected portion",
-                ).add_to(m)
-
-                # Add trim markers
-                folium.Marker(
-                    location=trimmed_route[0],
-                    popup="Trim Start",
-                    icon=folium.Icon(color="green", icon="play", prefix="fa"),
-                ).add_to(m)
-
-                folium.Marker(
-                    location=trimmed_route[-1],
-                    popup="Trim End",
-                    icon=folium.Icon(color="red", icon="stop", prefix="fa"),
-                ).add_to(m)
-
-        except Exception as e:
-            print(f"Error highlighting trimmed route: {e}")
-
-        # Calculate bounds for automatic zoom
-        try:
-            if self.route_points:
-                lats = [p[0] for p in self.route_points]
-                lons = [p[1] for p in self.route_points]
-                min_lat, max_lat = min(lats), max(lats)
-                min_lon, max_lon = min(lons), max(lons)
-
-                # Add some padding (5%)
-                lat_padding = (max_lat - min_lat) * 0.05
-                lon_padding = (max_lon - min_lon) * 0.05
-                bounds = [
-                    [min_lat - lat_padding, min_lon - lon_padding],
-                    [max_lat + lat_padding, max_lon + lon_padding],
-                ]
-                m.fit_bounds(bounds)
-        except Exception as e:
-            print(f"Error fitting map bounds: {e}")
-
-        # Add wind arrow AFTER map bounds have been set
-        wind_speed = self.params.get("wind_speed")
-        wind_dir = self.params.get("wind_direction")
-
-        if wind_speed not in [None, 0] and wind_dir is not None:
-            # Create a custom HTML element for the wind arrow
-            wind_html = f"""
-            <div id="wind-arrow" style="position: absolute; top: 10px; right: 10px; 
-                    background-color: rgba(255, 255, 255, 0.9); padding: 10px; 
-                    border-radius: 5px; border: 1px solid #4363d8; z-index: 1000;
-                    box-shadow: 0 2px 5px rgba(0,0,0,0.2);">
-                <div style="font-weight: bold; text-align: center; margin-bottom: 5px; color: #4363d8;">Wind</div>
-                <div style="text-align: center;">
-                    <div style="font-size: 28px; transform: rotate({wind_dir + 180}deg); color: #4363d8;">↑</div>
-                    <div style="font-size: 12px; margin-top: 5px;">{wind_speed} m/s</div>
-                    <div style="font-size: 12px;">{wind_dir}°</div>
-                </div>
-            </div>
-            """
-
-            # Add the HTML element to the map
-            m.get_root().html.add_child(folium.Element(wind_html))
-
-        # Save map to HTML and load into QWebEngineView
-        data = io.BytesIO()
-        m.save(data, close_file=False)
-        html_content = data.getvalue().decode()
-        self.map_widget.setHtml(html_content)
-
     def update_config_text(self):
         """Update the configuration text display"""
         lap_str = ", ".join(map(str, self.selected_laps))
@@ -506,84 +450,6 @@ class AnalysisResult(QMainWindow):
 
         self.config_text.setText(config_text)
 
-    def calculate_ve(self):
-        """Calculate virtual elevation with current parameters"""
-        # Extract actual elevation if available
-        self.actual_elevation = None
-        if (
-            "altitude" in self.merged_data.columns
-            and not self.merged_data["altitude"].isna().all()
-        ):
-            self.actual_elevation = self.merged_data["altitude"].values
-
-        # Calculate virtual elevation
-        self.virtual_elevation = self.ve_calculator.calculate_ve(
-            self.current_cda, self.current_crr
-        )
-
-        # Calculate metrics
-        if self.actual_elevation is not None:
-            # Ensure same length
-            min_len = min(len(self.virtual_elevation), len(self.actual_elevation))
-            ve_trim = self.virtual_elevation[:min_len]
-            elev_trim = self.actual_elevation[:min_len]
-
-            # Calibrate to match at trim start
-            trim_start_idx = self.trim_start
-            if trim_start_idx < min_len:
-                # Calculate offset to make virtual elevation match actual at trim start
-                offset = elev_trim[trim_start_idx] - ve_trim[trim_start_idx]
-                ve_calibrated = ve_trim + offset
-                self.virtual_elevation_calibrated = ve_calibrated
-            else:
-                self.virtual_elevation_calibrated = ve_trim
-
-            # Calculate metrics in trimmed region
-            trim_indices = np.where(
-                (np.arange(len(ve_trim)) >= self.trim_start)
-                & (np.arange(len(ve_trim)) <= self.trim_end)
-            )[0]
-
-            if len(trim_indices) > 2:  # Need at least 3 points for correlation
-                ve_trim_region = self.virtual_elevation_calibrated[trim_indices]
-                elev_trim_region = elev_trim[trim_indices]
-
-                # R² calculation
-                corr = np.corrcoef(ve_trim_region, elev_trim_region)[0, 1]
-                self.r2 = corr**2
-
-                # RMSE calculation
-                self.rmse = np.sqrt(np.mean((ve_trim_region - elev_trim_region) ** 2))
-
-                # Calculate elevation gain (difference between end and start)
-                # Make sure we don't exceed array bounds
-                safe_trim_end = min(self.trim_end, len(ve_trim) - 1)
-                safe_trim_start = min(self.trim_start, safe_trim_end)
-
-                # Elevation differences
-                self.ve_elevation_diff = (
-                    ve_calibrated[safe_trim_end] - ve_calibrated[safe_trim_start]
-                )
-                self.actual_elevation_diff = (
-                    elev_trim[safe_trim_end] - elev_trim[safe_trim_start]
-                )
-            else:
-                self.r2 = 0
-                self.rmse = 0
-                self.ve_elevation_diff = 0
-                self.actual_elevation_diff = 0
-        else:
-            # If no actual elevation data, still create a calibrated version
-            self.virtual_elevation_calibrated = self.virtual_elevation.copy()
-            self.ve_elevation_diff = (
-                self.virtual_elevation_calibrated[
-                    min(self.trim_end, len(self.virtual_elevation_calibrated) - 1)
-                ]
-                - self.virtual_elevation_calibrated[
-                    min(self.trim_start, len(self.virtual_elevation_calibrated) - 1)
-                ]
-            )
-
     def update_plots(self):
         """Update the virtual elevation plots"""
         # Clear previous plots
@@ -591,22 +457,12 @@ class AnalysisResult(QMainWindow):
 
         # Create figure with two subplots
         self.fig_canvas.fig.clear()
+
         gs = self.fig_canvas.fig.add_gridspec(2, 1, height_ratios=[3, 1])
         ax1 = self.fig_canvas.fig.add_subplot(gs[0])
         ax2 = self.fig_canvas.fig.add_subplot(gs[1])
 
-        # Use recorded distance from FIT file (convert to km) and reset to start from 0
-        if 'distance' in self.merged_data.columns and not self.merged_data['distance'].isna().all():
-            # Use recorded distance from FIT file (in meters), reset to start from 0, convert to km
-            distance_raw = self.merged_data['distance'].values
-            distance = (distance_raw - distance_raw[0]) / 1000  # Reset to 0 and convert to km
-        elif hasattr(self.ve_calculator, 'df') and 'v' in self.ve_calculator.df.columns:
-            # Fallback: calculate cumulative distance from speed (v is in m/s, dt=1s)
-            distance_m = np.cumsum(self.ve_calculator.df['v'].values * self.ve_calculator.dt)
-            distance = distance_m / 1000  # Convert to km
-        else:
-            # Final fallback to time-based if no distance or speed data
-            distance = np.arange(len(self.virtual_elevation)) / 1000
+        distance = self.distance
 
         # Plot virtual elevation with FULL OPACITY in trimmed region, REDUCED OPACITY elsewhere
         # First plot full curve with reduced opacity
@@ -771,7 +627,7 @@ class AnalysisResult(QMainWindow):
             )
 
         self.fig_canvas.fig.tight_layout()
-        self.fig_canvas.draw()
+        self.fig_canvas.draw_idle()
 
     def on_trim_start_changed(self, value):
         """Handle trim start slider value change"""
@@ -783,12 +639,11 @@ class AnalysisResult(QMainWindow):
         self.trim_start = value
         self.trim_start_label.setText(f"{value} s")
 
-        # Recalculate VE metrics and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update()
 
         # Update map to show trim points
-        self.create_map()
+        self.map_widget.set_trim_start(self.trim_start)
+        self.map_widget.update()
 
     def on_trim_end_changed(self, value):
         """Handle trim end slider value change"""
@@ -800,21 +655,18 @@ class AnalysisResult(QMainWindow):
         self.trim_end = value
         self.trim_end_label.setText(f"{value} s")
 
-        # Recalculate VE metrics and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update()
 
-        # Update map to show trim points
-        self.create_map()
+        self.map_widget.set_trim_end(self.trim_end)
+        self.map_widget.update()
 
     def on_cda_changed(self, value):
         """Handle CdA slider value change"""
         self.current_cda = value / 1000.0
         self.cda_label.setText(f"{self.current_cda:.3f}")
 
-        # Recalculate VE and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update()
+
         self.update_config_text()
 
     def on_crr_changed(self, value):
@@ -822,9 +674,8 @@ class AnalysisResult(QMainWindow):
         self.current_crr = value / 10000.0
         self.crr_label.setText(f"{self.current_crr:.4f}")
 
-        # Recalculate VE and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update()
+
         self.update_config_text()
 
     def _fit_map_to_full_route(self, m):
@@ -964,43 +815,30 @@ class AnalysisResult(QMainWindow):
 
     def back_to_selection(self):
         """Return to lap selection window"""
-        from ui.analysis_window import AnalysisWindow
-
-        self.analysis_window = AnalysisWindow(self.fit_file, self.settings)
-        self.analysis_window.show()
+        self.parent.show()
         self.close()
 
-    def map_time_to_route_index(self, time_index):
-        """
-        Map a time index from the full dataset to the corresponding index in route_points
+    def async_update(self):
+        values = {}
+        for key in VEWorker.INPUT_KEYS:
+            values[key] = getattr(self, key)
+        self.ve_worker.set_values(values)
 
-        Parameters:
-        -----------
-        time_index : int
-            Index in the merged_data dataframe
+    def on_ve_result_ready(self, res):
+        for key in VEWorker.RESULT_KEYS:
+            if key in res:
+                setattr(self, key, res[key])
+        self.update_plots()
 
-        Returns:
-        --------
-        int
-            Corresponding index in the route_points list, or None if not mappable
-        """
-        if not hasattr(self, "route_timestamps") or not self.route_timestamps:
-            return None
+    def join_threads(self):
+        if self.map_widget:
+            self.map_widget.close()
+            self.map_widget = None
+        if self.ve_thread:
+            self.ve_thread.quit()
+            self.ve_thread.wait()
+            self.ve_thread = None
 
-        if time_index < 0 or time_index >= len(self.merged_data):
-            return None
-
-        # Get the timestamp at this index
-        target_timestamp = self.merged_data["timestamp"].iloc[time_index]
-
-        # Find the closest timestamp in route_timestamps
-        if target_timestamp in self.route_timestamps:
-            return self.route_timestamps.index(target_timestamp)
-
-        # If not found directly, find the closest one
-        for i, ts in enumerate(self.route_timestamps):
-            if ts >= target_timestamp:
-                return i
-
-        # If we get here, target_timestamp is after all route_timestamps
-        return len(self.route_timestamps) - 1
+    def closeEvent(self, event):
+        self.join_threads()
+        event.accept()

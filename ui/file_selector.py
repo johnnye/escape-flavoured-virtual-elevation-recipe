@@ -178,12 +178,7 @@ class FileSelector(QMainWindow):
         # Connect slots
         self.thread.started.connect(self.worker.run)
         self.worker.finished.connect(self.on_fit_file_loaded)
-        self.worker.finished.connect(self.thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
         self.worker.error.connect(self.on_fit_file_error)
-        self.worker.error.connect(self.thread.quit)
-        self.worker.error.connect(self.worker.deleteLater)
 
         self.thread.start()
         self.set_ui_enabled(False)
@@ -196,6 +191,14 @@ class FileSelector(QMainWindow):
             self.settings.result_dir = dir_path
             self.settings.save_settings()
 
+    def join_thread(self, cancel: bool):
+        if self.thread:
+            if cancel:
+                self.worker.cancel()
+            self.thread.quit()
+            self.thread.wait()
+            self.thread = None
+
     def set_ui_enabled(self, enabled: bool):
         for widget in (self.file_label, self.file_button, self.file_path,
                        self.dir_label, self.dir_path, self.dir_button,
@@ -206,6 +209,8 @@ class FileSelector(QMainWindow):
 
     def on_fit_file_loaded(self, fit_file):
         self.set_ui_enabled(True)
+        self.join_thread(False)
+
         if fit_file.elevation_error_rate != 0:
             elevation_error_rate = int(file_file.elevation_error_rate * 100)
             QMessageBox.warning(self, "Invalid DEM File",
@@ -218,6 +223,7 @@ class FileSelector(QMainWindow):
 
     def on_fit_file_error(self, error):
         self.set_ui_enabled(True)
+        self.join_thread(False)
 
         if isinstance(error, CancelledError):
             return
@@ -230,9 +236,5 @@ class FileSelector(QMainWindow):
         error_dialog.exec()
 
     def closeEvent(self, event):
-        if self.thread:
-            self.worker.cancel()
-            self.thread.quit()
-            self.thread.wait()
-            self.thread = None
+        self.join_thread(True)
         event.accept()

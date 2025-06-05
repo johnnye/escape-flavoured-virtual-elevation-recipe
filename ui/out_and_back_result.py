@@ -8,9 +8,9 @@ import folium
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt
-from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtCore import (Qt, QThread)
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QFormLayout,
     QGroupBox,
@@ -32,735 +32,51 @@ from PySide6.QtWidgets import (
 )
 
 from models.virtual_elevation import VirtualElevation
+from ui.map_widget import (MapWidget, MapMode)
+from ui.async_worker import AsyncWorker
 
+class VEWorker(AsyncWorker):
+    INPUT_KEYS = [
+        "trim_start",
+        "trim_end",
+        "current_cda",
+        "current_crr",
+        "gps_marker_a_pos",
+        "gps_marker_b_pos",
+    ]
 
-class MplCanvas(FigureCanvas):
-    """Matplotlib canvas for embedding in Qt"""
+    RESULT_KEYS = [
+        "all_actual_elevations",
+        "detected_sections",
+        "mean_actual_distance_km",
+        "mean_actual_elevation",
+        "section_distances",
+        "section_ve_profiles",
+    ]
 
-    def __init__(self, parent=None, width=5, height=4, dpi=100):
-        self.fig = Figure(figsize=(width, height), dpi=dpi)
-        self.axes = self.fig.add_subplot(111)
-        super().__init__(self.fig)
-        self.setParent(parent)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.updateGeometry()
-
-
-class OutAndBackResult(QMainWindow):
-    """Window for displaying Out-and-Back analysis results"""
-
-    def __init__(self, fit_file, settings, selected_laps, params):
-        super().__init__()
-        self.fit_file = fit_file
-        self.settings = settings
-        self.selected_laps = selected_laps
+    def __init__(self, merged_data, params):
+        super(VEWorker, self).__init__()
+        self.merged_data = merged_data
         self.params = params
-        self.result_dir = settings.result_dir
-        self.detected_sections = []
-        self.section_ve_profiles = []
 
-        # Initialize these attributes BEFORE calling prepare_merged_data
-        self.trim_start = 0
-        self.trim_end = 0
-        self.gps_marker_a_pos = 0
-        self.gps_marker_b_pos = 0
+    def _process_value(self, values: dict):
+        for key in VEWorker.INPUT_KEYS:
+            if key in values:
+                setattr(self, key, values[key])
 
-        # Prepare merged lap data
-        self.prepare_merged_data()
+        # Detect sections with new gate positions
+        if values["detect_sections"]:
+            self.detect_sections()
 
-        # Create VE calculator
-        self.ve_calculator = VirtualElevation(self.merged_data, self.params)
-
-        # Get lap combination ID for settings
-        self.lap_combo_id = "_".join(map(str, sorted(self.selected_laps)))
-        self.settings_key = f"OUTBACK_lap_{self.lap_combo_id}"
-
-        # Try to load saved trim values for this lap combination
-        file_settings = self.settings.get_file_settings(self.fit_file.filename)
-        trim_settings = file_settings.get("trim_settings", {})
-        saved_trim = trim_settings.get(self.settings_key, {})
-
-        # Initialize UI values
-        if saved_trim and "trim_start" in saved_trim and "trim_end" in saved_trim:
-            # Use saved trim values if available
-            self.trim_start = saved_trim["trim_start"]
-            self.trim_end = saved_trim["trim_end"]
-            # Use saved GPS marker positions if available
-            self.gps_marker_a_pos = saved_trim.get(
-                "gps_marker_a_pos",
-                int(self.trim_start + (self.trim_end - self.trim_start) * 0.25),
-            )
-            self.gps_marker_b_pos = saved_trim.get(
-                "gps_marker_b_pos",
-                int(self.trim_start + (self.trim_end - self.trim_start) * 0.75),
-            )
-        else:
-            # Use defaults
-            self.trim_start = 0
-            self.trim_end = len(self.merged_data) - 1
-            # Default GPS markers to 1/4 and 3/4 of the selected range
-            self.gps_marker_a_pos = int(
-                self.trim_start + (self.trim_end - self.trim_start) * 0.25
-            )
-            self.gps_marker_b_pos = int(
-                self.trim_start + (self.trim_end - self.trim_start) * 0.75
-            )
-
-        # Initialize values for CdA and Crr
-        self.current_cda = self.params.get("cda")
-        self.current_crr = self.params.get("crr")
-
-        # If CdA or Crr are None (to be optimized), set initial values to middle of range
-        if self.current_cda is None:
-            if saved_trim and "cda" in saved_trim:
-                self.current_cda = saved_trim["cda"]
-            else:
-                self.current_cda = (
-                    self.params.get("cda_min", 0.15) + self.params.get("cda_max", 0.5)
-                ) / 2
-
-        if self.current_crr is None:
-            if saved_trim and "crr" in saved_trim:
-                self.current_crr = saved_trim["crr"]
-            else:
-                self.current_crr = (
-                    self.params.get("crr_min", 0.001) + self.params.get("crr_max", 0.03)
-                ) / 2
-
-        # Setup UI
-        self.initUI()
-
-        # Detect sections based on GPS markers
-        self.detect_sections()
-
-        # Calculate and plot initial VE
+        # Recalculate VE metrics and update plots
         self.calculate_ve()
-        self.update_plots()
 
-    def prepare_merged_data(self):
-        """Extract and merge data for selected laps"""
-        # Get records for selected laps
-        self.merged_data = self.fit_file.get_records_for_laps(self.selected_laps)
+        out_values = {}
+        for key in VEWorker.RESULT_KEYS:
+            out_values[key] = getattr(self, key)
+        out_values["detect_sections"] = values["detect_sections"]
 
-        # Check if we have enough data
-        if len(self.merged_data) < 30:
-            raise ValueError("Not enough data points (less than 30 seconds)")
-
-        # Get lap info for display
-        self.lap_info = []
-        all_laps = self.fit_file.get_lap_data()
-
-        for lap in all_laps:
-            if lap["lap_number"] in self.selected_laps:
-                self.lap_info.append(lap)
-
-        # Calculate distance, duration, etc. for the merged lap
-        self.total_distance = sum(lap["distance"] for lap in self.lap_info)
-        self.total_duration = sum(lap["duration"] for lap in self.lap_info)
-        self.avg_power = np.mean(self.merged_data["power"].dropna())
-        self.avg_speed = (
-            (self.total_distance / self.total_duration) * 3600
-            if self.total_duration > 0
-            else 0
-        )
-
-        # Extract GPS coordinates for map
-        if (
-            "position_lat" in self.merged_data.columns
-            and "position_long" in self.merged_data.columns
-        ):
-            self.has_gps = True
-            # Filter out missing coordinates
-            valid_coords = self.merged_data.dropna(
-                subset=["position_lat", "position_long"]
-            )
-            if not valid_coords.empty:
-                self.start_lat = valid_coords["position_lat"].iloc[0]
-                self.start_lon = valid_coords["position_long"].iloc[0]
-                self.end_lat = valid_coords["position_lat"].iloc[-1]
-                self.end_lon = valid_coords["position_long"].iloc[-1]
-
-                # Extract all route points
-                self.route_points = list(
-                    zip(valid_coords["position_lat"], valid_coords["position_long"])
-                )
-
-                # Store the timestamps to ensure correct mapping of trim indices to route points
-                self.route_timestamps = valid_coords["timestamp"].tolist()
-
-                # Initial trim values should correspond to the valid coordinates
-                if self.trim_start == 0 and self.trim_end == 0:
-                    self.trim_start = 0
-                    self.trim_end = len(valid_coords) - 1
-            else:
-                self.has_gps = False
-        else:
-            self.has_gps = False
-
-    def initUI(self):
-        """Initialize the UI components"""
-        self.setWindowTitle(
-            f'Out-and-Back Analysis - Laps {", ".join(map(str, self.selected_laps))}'
-        )
-        self.setGeometry(50, 50, 1200, 800)
-
-        # Main widget and layout
-        main_widget = QWidget()
-        main_layout = QVBoxLayout()
-
-        # Create a splitter for adjustable panels
-        splitter = QSplitter(Qt.Horizontal)
-
-        # Left side - Map and controls
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
-
-        # Map
-        if self.has_gps:
-            self.map_widget = QWebEngineView()
-            self.create_map()
-            left_layout.addWidget(self.map_widget, 2)
-        else:
-            no_gps_label = QLabel("No GPS data available")
-            no_gps_label.setAlignment(Qt.AlignCenter)
-            left_layout.addWidget(no_gps_label, 2)
-
-        # Detected sections table
-        section_table_group = QGroupBox("Detected Out-and-Back Laps")
-        section_table_layout = QVBoxLayout()
-
-        self.section_table = QTableWidget()
-        self.section_table.setColumnCount(4)
-        self.section_table.setHorizontalHeaderLabels(
-            ["Select", "Lap", "Duration", "Distance"]
-        )
-        section_table_layout.addWidget(self.section_table)
-
-        section_table_group.setLayout(section_table_layout)
-        left_layout.addWidget(section_table_group, 1)
-
-        # Parameter display
-        param_group = QGroupBox("Analysis Parameters")
-        param_layout = QFormLayout()
-
-        self.config_text = QTextEdit()
-        self.config_text.setReadOnly(True)
-        self.update_config_text()
-        param_layout.addRow("Configuration:", self.config_text)
-
-        # Configuration name input
-        self.config_name = QLineEdit("Out and Back Test")
-        param_layout.addRow("Save as:", self.config_name)
-
-        param_group.setLayout(param_layout)
-        left_layout.addWidget(param_group, 1)
-
-        # Control buttons
-        button_layout = QHBoxLayout()
-
-        self.back_button = QPushButton("Back to Lap Selection")
-        self.back_button.clicked.connect(self.back_to_selection)
-
-        self.close_button = QPushButton("Close App")
-        self.close_button.clicked.connect(self.close)
-
-        self.save_button = QPushButton("Save Results")
-        self.save_button.clicked.connect(self.save_results)
-        self.save_button.setStyleSheet(f"background-color: #4363d8; color: white;")
-
-        button_layout.addWidget(self.back_button)
-        button_layout.addWidget(self.close_button)
-        button_layout.addWidget(self.save_button)
-
-        left_layout.addLayout(button_layout)
-
-        # Right side - Plots and sliders
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-
-        # Plot area
-        plot_widget = QWidget()
-        plot_layout = QVBoxLayout(plot_widget)
-
-        # Create plots
-        self.fig_canvas = MplCanvas(self, width=5, height=4, dpi=100)
-        plot_layout.addWidget(self.fig_canvas)
-
-        right_layout.addWidget(plot_widget, 3)
-
-        # Sliders
-        slider_group = QGroupBox("Adjust Parameters")
-        slider_layout = QFormLayout()
-
-        # Trim start slider
-        self.trim_start_slider = QSlider(Qt.Horizontal)
-        self.trim_start_slider.setMinimum(0)
-        self.trim_start_slider.setMaximum(len(self.merged_data) - 30)
-        self.trim_start_slider.setValue(self.trim_start)  # Use the loaded trim value
-        self.trim_start_slider.valueChanged.connect(self.on_trim_start_changed)
-
-        self.trim_start_label = QLabel(f"{self.trim_start} s")
-        trim_start_layout = QHBoxLayout()
-        trim_start_layout.addWidget(self.trim_start_slider)
-        trim_start_layout.addWidget(self.trim_start_label)
-
-        slider_layout.addRow("Trim Start:", trim_start_layout)
-
-        # Trim end slider
-        self.trim_end_slider = QSlider(Qt.Horizontal)
-        self.trim_end_slider.setMinimum(30)
-        self.trim_end_slider.setMaximum(len(self.merged_data))
-        self.trim_end_slider.setValue(self.trim_end)  # Use the loaded trim value
-        self.trim_end_slider.valueChanged.connect(self.on_trim_end_changed)
-
-        self.trim_end_label = QLabel(f"{self.trim_end} s")
-        trim_end_layout = QHBoxLayout()
-        trim_end_layout.addWidget(self.trim_end_slider)
-        trim_end_layout.addWidget(self.trim_end_label)
-
-        slider_layout.addRow("Trim End:", trim_end_layout)
-
-        # GPS Marker A slider
-        self.gps_marker_a_slider = QSlider(Qt.Horizontal)
-        self.gps_marker_a_slider.setMinimum(self.trim_start)
-        self.gps_marker_a_slider.setMaximum(self.trim_end)
-        self.gps_marker_a_slider.setValue(self.gps_marker_a_pos)
-        self.gps_marker_a_slider.valueChanged.connect(self.on_gps_marker_a_changed)
-
-        self.gps_marker_a_label = QLabel(f"{self.gps_marker_a_pos} s")
-        gps_marker_a_layout = QHBoxLayout()
-        gps_marker_a_layout.addWidget(self.gps_marker_a_slider)
-        gps_marker_a_layout.addWidget(self.gps_marker_a_label)
-
-        slider_layout.addRow("GPS Marker A:", gps_marker_a_layout)
-
-        # GPS Marker B slider
-        self.gps_marker_b_slider = QSlider(Qt.Horizontal)
-        self.gps_marker_b_slider.setMinimum(self.trim_start)
-        self.gps_marker_b_slider.setMaximum(self.trim_end)
-        self.gps_marker_b_slider.setValue(self.gps_marker_b_pos)
-        self.gps_marker_b_slider.valueChanged.connect(self.on_gps_marker_b_changed)
-
-        self.gps_marker_b_label = QLabel(f"{self.gps_marker_b_pos} s")
-        gps_marker_b_layout = QHBoxLayout()
-        gps_marker_b_layout.addWidget(self.gps_marker_b_slider)
-        gps_marker_b_layout.addWidget(self.gps_marker_b_label)
-
-        slider_layout.addRow("GPS Marker B:", gps_marker_b_layout)
-
-        # CdA slider
-        self.cda_slider = QSlider(Qt.Horizontal)
-        self.cda_slider.setMinimum(int(self.params.get("cda_min", 0.15) * 1000))
-        self.cda_slider.setMaximum(int(self.params.get("cda_max", 0.5) * 1000))
-        self.cda_slider.setValue(int(self.current_cda * 1000))
-        self.cda_slider.valueChanged.connect(self.on_cda_changed)
-        self.cda_slider.setEnabled(self.params.get("cda") is None)
-
-        self.cda_label = QLabel(f"{self.current_cda:.3f}")
-        cda_layout = QHBoxLayout()
-        cda_layout.addWidget(self.cda_slider)
-        cda_layout.addWidget(self.cda_label)
-
-        slider_layout.addRow("CdA:", cda_layout)
-
-        # Crr slider
-        self.crr_slider = QSlider(Qt.Horizontal)
-        self.crr_slider.setMinimum(int(self.params.get("crr_min", 0.001) * 10000))
-        self.crr_slider.setMaximum(int(self.params.get("crr_max", 0.03) * 10000))
-        self.crr_slider.setValue(int(self.current_crr * 10000))
-        self.crr_slider.valueChanged.connect(self.on_crr_changed)
-        self.crr_slider.setEnabled(self.params.get("crr") is None)
-
-        self.crr_label = QLabel(f"{self.current_crr:.4f}")
-        crr_layout = QHBoxLayout()
-        crr_layout.addWidget(self.crr_slider)
-        crr_layout.addWidget(self.crr_label)
-
-        slider_layout.addRow("Crr:", crr_layout)
-
-        slider_group.setLayout(slider_layout)
-        right_layout.addWidget(slider_group, 1)
-
-        # Add widgets to splitter
-        splitter.addWidget(left_widget)
-        splitter.addWidget(right_widget)
-        splitter.setSizes([400, 800])  # Set initial sizes
-
-        # Add splitter to main layout
-        main_layout.addWidget(splitter)
-
-        main_widget.setLayout(main_layout)
-        self.setCentralWidget(main_widget)
-
-    def create_map(self):
-        """Create the map showing the merged track with start/end markers, GPS markers, and trimmed portion"""
-        if not self.has_gps or not self.route_points:
-            return
-
-        # Calculate center point
-        center_lat = (self.start_lat + self.end_lat) / 2
-        center_lon = (self.start_lon + self.end_lon) / 2
-
-        # Create map
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=12)
-
-        try:
-            # Map time indices to route indices
-            if not hasattr(self, "route_timestamps") or not self.route_timestamps:
-                # Fall back to simple index mapping if no timestamps available
-                total_points = len(self.route_points)
-                total_records = len(self.merged_data)
-
-                if total_points > 0 and total_records > 0:
-                    route_trim_start = min(
-                        int(self.trim_start * total_points / total_records),
-                        total_points - 1,
-                    )
-                    route_trim_end = min(
-                        int(self.trim_end * total_points / total_records),
-                        total_points - 1,
-                    )
-                    route_marker_a_pos = min(
-                        int(self.gps_marker_a_pos * total_points / total_records),
-                        total_points - 1,
-                    )
-                    route_marker_b_pos = min(
-                        int(self.gps_marker_b_pos * total_points / total_records),
-                        total_points - 1,
-                    )
-                else:
-                    route_trim_start = 0
-                    route_trim_end = len(self.route_points) - 1
-                    route_marker_a_pos = int((route_trim_start + route_trim_end) * 0.25)
-                    route_marker_b_pos = int((route_trim_start + route_trim_end) * 0.75)
-            else:
-                # Map using timestamps
-                route_trim_start = self.map_time_to_route_index(self.trim_start)
-                route_trim_end = self.map_time_to_route_index(self.trim_end)
-                route_marker_a_pos = self.map_time_to_route_index(self.gps_marker_a_pos)
-                route_marker_b_pos = self.map_time_to_route_index(self.gps_marker_b_pos)
-
-                # Fall back if mapping fails
-                if (
-                    route_trim_start is None
-                    or route_trim_end is None
-                    or route_marker_a_pos is None
-                    or route_marker_b_pos is None
-                ):
-                    total_points = len(self.route_points)
-                    total_records = len(self.merged_data)
-
-                    if total_points > 0 and total_records > 0:
-                        route_trim_start = min(
-                            int(self.trim_start * total_points / total_records),
-                            total_points - 1,
-                        )
-                        route_trim_end = min(
-                            int(self.trim_end * total_points / total_records),
-                            total_points - 1,
-                        )
-                        route_marker_a_pos = min(
-                            int(self.gps_marker_a_pos * total_points / total_records),
-                            total_points - 1,
-                        )
-                        route_marker_b_pos = min(
-                            int(self.gps_marker_b_pos * total_points / total_records),
-                            total_points - 1,
-                        )
-                    else:
-                        route_trim_start = 0
-                        route_trim_end = len(self.route_points) - 1
-                        route_marker_a_pos = int(
-                            (route_trim_start + route_trim_end) * 0.25
-                        )
-                        route_marker_b_pos = int(
-                            (route_trim_start + route_trim_end) * 0.75
-                        )
-
-            # Make sure indices are valid
-            route_trim_start = max(0, min(route_trim_start, len(self.route_points) - 1))
-            route_trim_end = max(
-                route_trim_start, min(route_trim_end, len(self.route_points) - 1)
-            )
-            route_marker_a_pos = max(
-                route_trim_start, min(route_marker_a_pos, route_trim_end)
-            )
-            route_marker_b_pos = max(
-                route_trim_start, min(route_marker_b_pos, route_trim_end)
-            )
-
-            # 1. Draw the parts before trim_start with dashed blue line (if exists)
-            if route_trim_start > 0:
-                pre_trim_route = self.route_points[: route_trim_start + 1]
-                folium.PolyLine(
-                    pre_trim_route,
-                    color="#4363d8",  # Blue color
-                    weight=3,
-                    opacity=0.5,
-                    dash_array="5,10",  # Dashed line
-                    popup="Pre-selected portion",
-                ).add_to(m)
-
-            # 2. Draw the parts after trim_end with dashed blue line (if exists)
-            if route_trim_end < len(self.route_points) - 1:
-                post_trim_route = self.route_points[route_trim_end:]
-                folium.PolyLine(
-                    post_trim_route,
-                    color="#4363d8",  # Blue color
-                    weight=3,
-                    opacity=0.5,
-                    dash_array="5,10",  # Dashed line
-                    popup="Post-selected portion",
-                ).add_to(m)
-
-            # 3. Draw the selected portion with solid blue line
-            trimmed_route = self.route_points[route_trim_start : route_trim_end + 1]
-            if len(trimmed_route) > 1:
-                folium.PolyLine(
-                    trimmed_route,
-                    color="#4363d8",  # Blue color
-                    weight=5,  # Slightly thicker
-                    opacity=1.0,  # Full opacity
-                    popup="Selected portion",
-                ).add_to(m)
-
-                # Add trim markers
-                folium.Marker(
-                    location=trimmed_route[0],
-                    popup="Trim Start",
-                    icon=folium.Icon(color="green", icon="play", prefix="fa"),
-                ).add_to(m)
-
-                folium.Marker(
-                    location=trimmed_route[-1],
-                    popup="Trim End",
-                    icon=folium.Icon(color="red", icon="stop", prefix="fa"),
-                ).add_to(m)
-
-            if 0 <= route_marker_a_pos - route_trim_start < len(trimmed_route):
-                marker_a_location = trimmed_route[route_marker_a_pos - route_trim_start]
-
-                # Use a CircleMarker instead of standard marker
-                folium.CircleMarker(
-                    location=marker_a_location,
-                    radius=8,
-                    color="#3186cc",
-                    fill=True,
-                    fill_color="#3186cc",
-                    fill_opacity=0.8,
-                    popup="Point A",
-                    weight=2,
-                ).add_to(m)
-
-                # Add a letter label using DivIcon
-                folium.map.Marker(
-                    marker_a_location,
-                    icon=folium.DivIcon(
-                        icon_size=(20, 20),
-                        icon_anchor=(10, 10),
-                        html='<div style="font-size: 12pt; font-weight: bold; color: white; background-color: #3186cc; border-radius: 50%; width: 20px; height: 20px; line-height: 20px; text-align: center;">A</div>',
-                    ),
-                ).add_to(m)
-
-                # Add detection radius
-                folium.Circle(
-                    location=marker_a_location,
-                    radius=20,  # 20 meters
-                    color="#3186cc",
-                    fill=True,
-                    fill_color="#3186cc",
-                    fill_opacity=0.2,
-                    popup="Point A Detection Zone",
-                ).add_to(m)
-
-            # Replace marker B implementation
-            if 0 <= route_marker_b_pos - route_trim_start < len(trimmed_route):
-                marker_b_location = trimmed_route[route_marker_b_pos - route_trim_start]
-
-                # Use a CircleMarker instead of standard marker
-                folium.CircleMarker(
-                    location=marker_b_location,
-                    radius=8,
-                    color="#9c27b0",
-                    fill=True,
-                    fill_color="#9c27b0",
-                    fill_opacity=0.8,
-                    popup="Point B",
-                    weight=2,
-                ).add_to(m)
-
-                # Add a letter label using DivIcon
-                folium.map.Marker(
-                    marker_b_location,
-                    icon=folium.DivIcon(
-                        icon_size=(20, 20),
-                        icon_anchor=(10, 10),
-                        html='<div style="font-size: 12pt; font-weight: bold; color: white; background-color: #9c27b0; border-radius: 50%; width: 20px; height: 20px; line-height: 20px; text-align: center;">B</div>',
-                    ),
-                ).add_to(m)
-
-                # Add detection radius
-                folium.Circle(
-                    location=marker_b_location,
-                    radius=20,  # 20 meters
-                    color="#9c27b0",
-                    fill=True,
-                    fill_color="#9c27b0",
-                    fill_opacity=0.2,
-                    popup="Point B Detection Zone",
-                ).add_to(m)
-
-                # 4. Highlight detected sections if available
-                if hasattr(self, "detected_sections") and self.detected_sections:
-                    for i, section in enumerate(self.detected_sections):
-                        # Use different colors for outbound and inbound parts
-                        outbound_color = "#ff7f0e"  # Orange
-                        inbound_color = "#2ca02c"  # Green
-
-                        # Outbound: A to B
-                        if (
-                            "outbound_start_idx" in section
-                            and "outbound_end_idx" in section
-                        ):
-                            outbound_start = self.map_time_to_route_index(
-                                section["outbound_start_idx"]
-                            )
-                            outbound_end = self.map_time_to_route_index(
-                                section["outbound_end_idx"]
-                            )
-
-                            if outbound_start is not None and outbound_end is not None:
-                                outbound_start = max(
-                                    0, min(outbound_start, len(self.route_points) - 1)
-                                )
-                                outbound_end = max(
-                                    outbound_start,
-                                    min(outbound_end, len(self.route_points) - 1),
-                                )
-
-                                outbound_route = self.route_points[
-                                    outbound_start : outbound_end + 1
-                                ]
-                                if len(outbound_route) > 1:
-                                    folium.PolyLine(
-                                        outbound_route,
-                                        color=outbound_color,
-                                        weight=5,
-                                        opacity=0.7,
-                                        popup=f"Section {i+1} Outbound (A→B)",
-                                    ).add_to(m)
-
-                        # Inbound: B to A
-                        if (
-                            "inbound_start_idx" in section
-                            and "inbound_end_idx" in section
-                        ):
-                            inbound_start = self.map_time_to_route_index(
-                                section["inbound_start_idx"]
-                            )
-                            inbound_end = self.map_time_to_route_index(
-                                section["inbound_end_idx"]
-                            )
-
-                            if inbound_start is not None and inbound_end is not None:
-                                inbound_start = max(
-                                    0, min(inbound_start, len(self.route_points) - 1)
-                                )
-                                inbound_end = max(
-                                    inbound_start,
-                                    min(inbound_end, len(self.route_points) - 1),
-                                )
-
-                                inbound_route = self.route_points[
-                                    inbound_start : inbound_end + 1
-                                ]
-                                if len(inbound_route) > 1:
-                                    folium.PolyLine(
-                                        inbound_route,
-                                        color=inbound_color,
-                                        weight=5,
-                                        opacity=0.7,
-                                        popup=f"Section {i+1} Inbound (B→A)",
-                                    ).add_to(m)
-
-        except Exception as e:
-            print(f"Error highlighting route: {e}")
-
-        # Calculate bounds for automatic zoom
-        try:
-            if self.route_points:
-                lats = [p[0] for p in self.route_points]
-                lons = [p[1] for p in self.route_points]
-                min_lat, max_lat = min(lats), max(lats)
-                min_lon, max_lon = min(lons), max(lons)
-
-                # Add some padding (5%)
-                lat_padding = (max_lat - min_lat) * 0.05
-                lon_padding = (max_lon - min_lon) * 0.05
-                bounds = [
-                    [min_lat - lat_padding, min_lon - lon_padding],
-                    [max_lat + lat_padding, max_lon + lon_padding],
-                ]
-                m.fit_bounds(bounds)
-        except Exception as e:
-            print(f"Error fitting map bounds: {e}")
-
-        # Add wind arrow AFTER map bounds have been set
-        wind_speed = self.params.get("wind_speed")
-        wind_dir = self.params.get("wind_direction")
-
-        if wind_speed not in [None, 0] and wind_dir is not None:
-            # Create a custom HTML element for the wind arrow
-            wind_html = f"""
-            <div id="wind-arrow" style="position: absolute; top: 10px; right: 10px; 
-                    background-color: rgba(255, 255, 255, 0.9); padding: 10px; 
-                    border-radius: 5px; border: 1px solid #4363d8; z-index: 1000;
-                    box-shadow: 0 2px 5px rgba(0,0,0,0.2);">
-                <div style="font-weight: bold; text-align: center; margin-bottom: 5px; color: #4363d8;">Wind</div>
-                <div style="text-align: center;">
-                    <div style="font-size: 28px; transform: rotate({wind_dir + 180}deg); color: #4363d8;">↑</div>
-                    <div style="font-size: 12px; margin-top: 5px;">{wind_speed} m/s</div>
-                    <div style="font-size: 12px;">{wind_dir}°</div>
-                </div>
-            </div>
-            """
-
-            # Add the HTML element to the map
-            m.get_root().html.add_child(folium.Element(wind_html))
-
-        # Save map to HTML and load into QWebEngineView
-        data = io.BytesIO()
-        m.save(data, close_file=False)
-        html_content = data.getvalue().decode()
-        self.map_widget.setHtml(html_content)
-
-    def update_config_text(self):
-        """Update the configuration text display"""
-        lap_str = ", ".join(map(str, self.selected_laps))
-        distance_str = f"{self.total_distance:.2f} km"
-        duration_str = f"{self.total_duration:.0f} s"
-        power_str = f"{self.avg_power:.0f} W"
-        # Convert speed from m/s to km/h for display
-        speed_str = f"{self.avg_speed:.2f} km/h"
-
-        config_text = f"Selected Laps: {lap_str}\n"
-        config_text += f"Distance: {distance_str}\n"
-        config_text += f"Duration: {duration_str}\n"
-        config_text += f"Avg Power: {power_str}\n"
-        config_text += f"Avg Speed: {speed_str}\n"
-        config_text += f"System Mass: {self.params.get('system_mass', 90)} kg\n"
-        config_text += f"Rho (air density): {self.params.get('rho', 1.2)} kg/m³\n"
-        config_text += f"Eta (drivetrain eff.): {self.params.get('eta', 0.98)}\n"
-        config_text += f"Current CdA: {self.current_cda:.3f}\n"
-        config_text += f"Current Crr: {self.current_crr:.4f}\n"
-
-        if self.params.get("wind_speed") not in [None, 0]:
-            config_text += f"Wind Speed: {self.params.get('wind_speed')} m/s\n"
-
-        if self.params.get("wind_direction") is not None:
-            config_text += f"Wind Direction: {self.params.get('wind_direction')}°"
-
-        self.config_text.setText(config_text)
+        return out_values
 
     def detect_sections(self):
         """
@@ -773,9 +89,6 @@ class OutAndBackResult(QMainWindow):
         4. Marker A is passed again in opposite direction (inbound end)
         """
         self.detected_sections = []
-
-        if not self.has_gps:
-            return
 
         # Get valid GPS coordinates
         valid_coords = self.merged_data.dropna(subset=["position_lat", "position_long"])
@@ -1069,58 +382,6 @@ class OutAndBackResult(QMainWindow):
                         inbound_started = False
                         current_section = {}
 
-        # Update the section table
-        self.update_section_table()
-
-    def update_section_table(self):
-        """Update the section table with detected out-and-back sections"""
-        self.section_table.setRowCount(len(self.detected_sections))
-
-        for row, section in enumerate(self.detected_sections):
-            # Checkbox for selection
-            checkbox = QCheckBox()
-            checkbox.setChecked(True)  # All sections selected by default
-            checkbox.stateChanged.connect(self.update_plots)
-            self.section_table.setCellWidget(row, 0, checkbox)
-
-            # Section number
-            self.section_table.setItem(row, 1, QTableWidgetItem(str(row + 1)))
-
-            # Duration
-            duration_mins = int(section["total_duration"] // 60)
-            duration_secs = int(section["total_duration"] % 60)
-            self.section_table.setItem(
-                row, 2, QTableWidgetItem(f"{duration_mins:02d}:{duration_secs:02d}")
-            )
-
-            # Distance
-            self.section_table.setItem(
-                row, 3, QTableWidgetItem(f"{section['total_distance']:.2f} km")
-            )
-
-            # Make cells read-only
-            for col in range(1, 4):
-                item = self.section_table.item(row, col)
-                if item:
-                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-
-        # Resize columns to fit content
-        header = self.section_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        for i in range(1, 4):
-            header.setSectionResizeMode(i, QHeaderView.Stretch)
-
-    def get_selected_section_indices(self):
-        """Get indices of selected sections in the table"""
-        selected_indices = []
-
-        for row in range(self.section_table.rowCount()):
-            checkbox = self.section_table.cellWidget(row, 0)
-            if checkbox and checkbox.isChecked():
-                selected_indices.append(row)
-
-        return selected_indices
-
     # Update in calculate_ve method to create a single mean elevation profile
     def calculate_ve(self):
         """Calculate virtual elevation for each detected section, separate for outbound and inbound segments"""
@@ -1303,6 +564,446 @@ class OutAndBackResult(QMainWindow):
             # Store mean elevation profile
             self.mean_actual_elevation = mean_elevation
             self.mean_actual_distance_km = reference_distance_km
+
+
+class MplCanvas(FigureCanvas):
+    """Matplotlib canvas for embedding in Qt"""
+
+    def __init__(self, parent=None, width=5, height=4, dpi=100):
+        self.fig = Figure(figsize=(width, height), dpi=dpi)
+        self.axes = self.fig.add_subplot(111)
+        super().__init__(self.fig)
+        self.setParent(parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.updateGeometry()
+
+
+class OutAndBackResult(QMainWindow):
+    """Window for displaying Out-and-Back analysis results"""
+
+    def __init__(self, parent, fit_file, settings, selected_laps, params):
+        super().__init__()
+        self.parent = parent
+        self.fit_file = fit_file
+        self.settings = settings
+        self.selected_laps = selected_laps
+        self.params = params
+        self.result_dir = settings.result_dir
+        self.detected_sections = []
+        self.section_ve_profiles = []
+
+        # Initialize these attributes BEFORE calling prepare_merged_data
+        self.trim_start = 0
+        self.trim_end = 0
+        self.gps_marker_a_pos = 0
+        self.gps_marker_b_pos = 0
+
+        # Prepare merged lap data
+        self.prepare_merged_data()
+
+        self.ve_worker = VEWorker(self.merged_data, self.params)
+        self.ve_thread = QThread()
+        self.ve_worker.moveToThread(self.ve_thread)
+        self.ve_worker.resultReady.connect(self.on_ve_result_ready)
+        self.ve_thread.start()
+        QApplication.instance().aboutToQuit.connect(self.join_threads)
+
+        # Get lap combination ID for settings
+        self.lap_combo_id = "_".join(map(str, sorted(self.selected_laps)))
+        self.settings_key = f"OUTBACK_lap_{self.lap_combo_id}"
+
+        # Try to load saved trim values for this lap combination
+        file_settings = self.settings.get_file_settings(self.fit_file.filename)
+        trim_settings = file_settings.get("trim_settings", {})
+        saved_trim = trim_settings.get(self.settings_key, {})
+
+        # Initialize UI values
+        if saved_trim and "trim_start" in saved_trim and "trim_end" in saved_trim:
+            # Use saved trim values if available
+            self.trim_start = saved_trim["trim_start"]
+            self.trim_end = saved_trim["trim_end"]
+            # Use saved GPS marker positions if available
+            self.gps_marker_a_pos = saved_trim.get(
+                "gps_marker_a_pos",
+                int(self.trim_start + (self.trim_end - self.trim_start) * 0.25),
+            )
+            self.gps_marker_b_pos = saved_trim.get(
+                "gps_marker_b_pos",
+                int(self.trim_start + (self.trim_end - self.trim_start) * 0.75),
+            )
+        else:
+            # Use defaults
+            self.trim_start = 0
+            self.trim_end = len(self.merged_data) - 1
+            # Default GPS markers to 1/4 and 3/4 of the selected range
+            self.gps_marker_a_pos = int(
+                self.trim_start + (self.trim_end - self.trim_start) * 0.25
+            )
+            self.gps_marker_b_pos = int(
+                self.trim_start + (self.trim_end - self.trim_start) * 0.75
+            )
+
+        # Initialize values for CdA and Crr
+        self.current_cda = self.params.get("cda")
+        self.current_crr = self.params.get("crr")
+
+        # If CdA or Crr are None (to be optimized), set initial values to middle of range
+        if self.current_cda is None:
+            if saved_trim and "cda" in saved_trim:
+                self.current_cda = saved_trim["cda"]
+            else:
+                self.current_cda = (
+                    self.params.get("cda_min", 0.15) + self.params.get("cda_max", 0.5)
+                ) / 2
+
+        if self.current_crr is None:
+            if saved_trim and "crr" in saved_trim:
+                self.current_crr = saved_trim["crr"]
+            else:
+                self.current_crr = (
+                    self.params.get("crr_min", 0.001) + self.params.get("crr_max", 0.03)
+                ) / 2
+
+        # Setup UI
+        self.initUI()
+
+        self.async_update(True)
+
+    def prepare_merged_data(self):
+        """Extract and merge data for selected laps"""
+        # Get records for selected laps
+        self.merged_data = self.fit_file.get_records_for_laps(self.selected_laps)
+
+        # Check if we have enough data
+        if len(self.merged_data) < 30:
+            raise ValueError("Not enough data points (less than 30 seconds)")
+
+        # Get lap info for display
+        self.lap_info = []
+        all_laps = self.fit_file.get_lap_data()
+
+        for lap in all_laps:
+            if lap["lap_number"] in self.selected_laps:
+                self.lap_info.append(lap)
+
+        # Calculate distance, duration, etc. for the merged lap
+        self.total_distance = sum(lap["distance"] for lap in self.lap_info)
+        self.total_duration = sum(lap["duration"] for lap in self.lap_info)
+        self.avg_power = np.mean(self.merged_data["power"].dropna())
+        self.avg_speed = (
+            (self.total_distance / self.total_duration) * 3600
+            if self.total_duration > 0
+            else 0
+        )
+
+        # Extract GPS coordinates for map
+        if (
+            "position_lat" in self.merged_data.columns
+            and "position_long" in self.merged_data.columns
+        ):
+            self.has_gps = True
+            # Filter out missing coordinates
+            valid_coords = self.merged_data.dropna(
+                subset=["position_lat", "position_long"]
+            )
+            if not valid_coords.empty:
+                self.start_lat = valid_coords["position_lat"].iloc[0]
+                self.start_lon = valid_coords["position_long"].iloc[0]
+                self.end_lat = valid_coords["position_lat"].iloc[-1]
+                self.end_lon = valid_coords["position_long"].iloc[-1]
+
+                # Extract all route points
+                self.route_points = list(
+                    zip(valid_coords["position_lat"], valid_coords["position_long"])
+                )
+
+                # Store the timestamps to ensure correct mapping of trim indices to route points
+                self.route_timestamps = valid_coords["timestamp"].tolist()
+
+                # Initial trim values should correspond to the valid coordinates
+                if self.trim_start == 0 and self.trim_end == 0:
+                    self.trim_start = 0
+                    self.trim_end = len(valid_coords) - 1
+            else:
+                self.has_gps = False
+        else:
+            self.has_gps = False
+
+    def initUI(self):
+        """Initialize the UI components"""
+        self.setWindowTitle(
+            f'Out-and-Back Analysis - Laps {", ".join(map(str, self.selected_laps))}'
+        )
+        self.setGeometry(50, 50, 1200, 800)
+
+        # Main widget and layout
+        main_widget = QWidget()
+        main_layout = QVBoxLayout()
+
+        # Create a splitter for adjustable panels
+        splitter = QSplitter(Qt.Horizontal)
+
+        # Left side - Map and controls
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+
+        # Map
+        self.map_widget = MapWidget(MapMode.MARKER_AB, self.merged_data, self.params)
+        if self.map_widget:
+            self.map_widget.set_marker_a_pos(self.gps_marker_a_pos)
+            self.map_widget.set_marker_b_pos(self.gps_marker_b_pos)
+            self.map_widget.set_trim_start(self.trim_start)
+            self.map_widget.set_trim_end(self.trim_end)
+            self.map_widget.update()
+            left_layout.addWidget(self.map_widget, 2)
+        else:
+            no_gps_label = QLabel("No GPS data available")
+            no_gps_label.setAlignment(Qt.AlignCenter)
+            left_layout.addWidget(no_gps_label, 2)
+
+        # Detected sections table
+        section_table_group = QGroupBox("Detected Out-and-Back Laps")
+        section_table_layout = QVBoxLayout()
+
+        self.section_table = QTableWidget()
+        self.section_table.setColumnCount(4)
+        self.section_table.setHorizontalHeaderLabels(
+            ["Select", "Lap", "Duration", "Distance"]
+        )
+        section_table_layout.addWidget(self.section_table)
+
+        section_table_group.setLayout(section_table_layout)
+        left_layout.addWidget(section_table_group, 1)
+
+        # Parameter display
+        param_group = QGroupBox("Analysis Parameters")
+        param_layout = QFormLayout()
+
+        self.config_text = QTextEdit()
+        self.config_text.setReadOnly(True)
+        self.update_config_text()
+        param_layout.addRow("Configuration:", self.config_text)
+
+        # Configuration name input
+        self.config_name = QLineEdit("Out and Back Test")
+        param_layout.addRow("Save as:", self.config_name)
+
+        param_group.setLayout(param_layout)
+        left_layout.addWidget(param_group, 1)
+
+        # Control buttons
+        button_layout = QHBoxLayout()
+
+        self.back_button = QPushButton("Back to Lap Selection")
+        self.back_button.clicked.connect(self.back_to_selection)
+
+        self.close_button = QPushButton("Close App")
+        self.close_button.clicked.connect(self.close)
+
+        self.save_button = QPushButton("Save Results")
+        self.save_button.clicked.connect(self.save_results)
+        self.save_button.setStyleSheet(f"background-color: #4363d8; color: white;")
+
+        button_layout.addWidget(self.back_button)
+        button_layout.addWidget(self.close_button)
+        button_layout.addWidget(self.save_button)
+
+        left_layout.addLayout(button_layout)
+
+        # Right side - Plots and sliders
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+
+        # Plot area
+        plot_widget = QWidget()
+        plot_layout = QVBoxLayout(plot_widget)
+
+        # Create plots
+        self.fig_canvas = MplCanvas(self, width=5, height=4, dpi=100)
+        plot_layout.addWidget(self.fig_canvas)
+
+        right_layout.addWidget(plot_widget, 3)
+
+        # Sliders
+        slider_group = QGroupBox("Adjust Parameters")
+        slider_layout = QFormLayout()
+
+        # Trim start slider
+        self.trim_start_slider = QSlider(Qt.Horizontal)
+        self.trim_start_slider.setMinimum(0)
+        self.trim_start_slider.setMaximum(len(self.merged_data) - 30)
+        self.trim_start_slider.setValue(self.trim_start)  # Use the loaded trim value
+        self.trim_start_slider.valueChanged.connect(self.on_trim_start_changed)
+
+        self.trim_start_label = QLabel(f"{self.trim_start} s")
+        trim_start_layout = QHBoxLayout()
+        trim_start_layout.addWidget(self.trim_start_slider)
+        trim_start_layout.addWidget(self.trim_start_label)
+
+        slider_layout.addRow("Trim Start:", trim_start_layout)
+
+        # Trim end slider
+        self.trim_end_slider = QSlider(Qt.Horizontal)
+        self.trim_end_slider.setMinimum(30)
+        self.trim_end_slider.setMaximum(len(self.merged_data))
+        self.trim_end_slider.setValue(self.trim_end)  # Use the loaded trim value
+        self.trim_end_slider.valueChanged.connect(self.on_trim_end_changed)
+
+        self.trim_end_label = QLabel(f"{self.trim_end} s")
+        trim_end_layout = QHBoxLayout()
+        trim_end_layout.addWidget(self.trim_end_slider)
+        trim_end_layout.addWidget(self.trim_end_label)
+
+        slider_layout.addRow("Trim End:", trim_end_layout)
+
+        # GPS Marker A slider
+        self.gps_marker_a_slider = QSlider(Qt.Horizontal)
+        self.gps_marker_a_slider.setMinimum(self.trim_start)
+        self.gps_marker_a_slider.setMaximum(self.trim_end)
+        self.gps_marker_a_slider.setValue(self.gps_marker_a_pos)
+        self.gps_marker_a_slider.valueChanged.connect(self.on_gps_marker_a_changed)
+
+        self.gps_marker_a_label = QLabel(f"{self.gps_marker_a_pos} s")
+        gps_marker_a_layout = QHBoxLayout()
+        gps_marker_a_layout.addWidget(self.gps_marker_a_slider)
+        gps_marker_a_layout.addWidget(self.gps_marker_a_label)
+
+        slider_layout.addRow("GPS Marker A:", gps_marker_a_layout)
+
+        # GPS Marker B slider
+        self.gps_marker_b_slider = QSlider(Qt.Horizontal)
+        self.gps_marker_b_slider.setMinimum(self.trim_start)
+        self.gps_marker_b_slider.setMaximum(self.trim_end)
+        self.gps_marker_b_slider.setValue(self.gps_marker_b_pos)
+        self.gps_marker_b_slider.valueChanged.connect(self.on_gps_marker_b_changed)
+
+        self.gps_marker_b_label = QLabel(f"{self.gps_marker_b_pos} s")
+        gps_marker_b_layout = QHBoxLayout()
+        gps_marker_b_layout.addWidget(self.gps_marker_b_slider)
+        gps_marker_b_layout.addWidget(self.gps_marker_b_label)
+
+        slider_layout.addRow("GPS Marker B:", gps_marker_b_layout)
+
+        # CdA slider
+        self.cda_slider = QSlider(Qt.Horizontal)
+        self.cda_slider.setMinimum(int(self.params.get("cda_min", 0.15) * 1000))
+        self.cda_slider.setMaximum(int(self.params.get("cda_max", 0.5) * 1000))
+        self.cda_slider.setValue(int(self.current_cda * 1000))
+        self.cda_slider.valueChanged.connect(self.on_cda_changed)
+        self.cda_slider.setEnabled(self.params.get("cda") is None)
+
+        self.cda_label = QLabel(f"{self.current_cda:.3f}")
+        cda_layout = QHBoxLayout()
+        cda_layout.addWidget(self.cda_slider)
+        cda_layout.addWidget(self.cda_label)
+
+        slider_layout.addRow("CdA:", cda_layout)
+
+        # Crr slider
+        self.crr_slider = QSlider(Qt.Horizontal)
+        self.crr_slider.setMinimum(int(self.params.get("crr_min", 0.001) * 10000))
+        self.crr_slider.setMaximum(int(self.params.get("crr_max", 0.03) * 10000))
+        self.crr_slider.setValue(int(self.current_crr * 10000))
+        self.crr_slider.valueChanged.connect(self.on_crr_changed)
+        self.crr_slider.setEnabled(self.params.get("crr") is None)
+
+        self.crr_label = QLabel(f"{self.current_crr:.4f}")
+        crr_layout = QHBoxLayout()
+        crr_layout.addWidget(self.crr_slider)
+        crr_layout.addWidget(self.crr_label)
+
+        slider_layout.addRow("Crr:", crr_layout)
+
+        slider_group.setLayout(slider_layout)
+        right_layout.addWidget(slider_group, 1)
+
+        # Add widgets to splitter
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setSizes([400, 800])  # Set initial sizes
+
+        # Add splitter to main layout
+        main_layout.addWidget(splitter)
+
+        main_widget.setLayout(main_layout)
+        self.setCentralWidget(main_widget)
+
+    def update_config_text(self):
+        """Update the configuration text display"""
+        lap_str = ", ".join(map(str, self.selected_laps))
+        distance_str = f"{self.total_distance:.2f} km"
+        duration_str = f"{self.total_duration:.0f} s"
+        power_str = f"{self.avg_power:.0f} W"
+        # Convert speed from m/s to km/h for display
+        speed_str = f"{self.avg_speed:.2f} km/h"
+
+        config_text = f"Selected Laps: {lap_str}\n"
+        config_text += f"Distance: {distance_str}\n"
+        config_text += f"Duration: {duration_str}\n"
+        config_text += f"Avg Power: {power_str}\n"
+        config_text += f"Avg Speed: {speed_str}\n"
+        config_text += f"System Mass: {self.params.get('system_mass', 90)} kg\n"
+        config_text += f"Rho (air density): {self.params.get('rho', 1.2)} kg/m³\n"
+        config_text += f"Eta (drivetrain eff.): {self.params.get('eta', 0.98)}\n"
+        config_text += f"Current CdA: {self.current_cda:.3f}\n"
+        config_text += f"Current Crr: {self.current_crr:.4f}\n"
+
+        if self.params.get("wind_speed") not in [None, 0]:
+            config_text += f"Wind Speed: {self.params.get('wind_speed')} m/s\n"
+
+        if self.params.get("wind_direction") is not None:
+            config_text += f"Wind Direction: {self.params.get('wind_direction')}°"
+
+        self.config_text.setText(config_text)
+
+    def update_section_table(self):
+        """Update the section table with detected out-and-back sections"""
+        self.section_table.setRowCount(len(self.detected_sections))
+
+        for row, section in enumerate(self.detected_sections):
+            # Checkbox for selection
+            checkbox = QCheckBox()
+            checkbox.setChecked(True)  # All sections selected by default
+            checkbox.stateChanged.connect(self.update_plots)
+            self.section_table.setCellWidget(row, 0, checkbox)
+
+            # Section number
+            self.section_table.setItem(row, 1, QTableWidgetItem(str(row + 1)))
+
+            # Duration
+            duration_mins = int(section["total_duration"] // 60)
+            duration_secs = int(section["total_duration"] % 60)
+            self.section_table.setItem(
+                row, 2, QTableWidgetItem(f"{duration_mins:02d}:{duration_secs:02d}")
+            )
+
+            # Distance
+            self.section_table.setItem(
+                row, 3, QTableWidgetItem(f"{section['total_distance']:.2f} km")
+            )
+
+            # Make cells read-only
+            for col in range(1, 4):
+                item = self.section_table.item(row, col)
+                if item:
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+
+        # Resize columns to fit content
+        header = self.section_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for i in range(1, 4):
+            header.setSectionResizeMode(i, QHeaderView.Stretch)
+
+    def get_selected_section_indices(self):
+        """Get indices of selected sections in the table"""
+        selected_indices = []
+
+        for row in range(self.section_table.rowCount()):
+            checkbox = self.section_table.cellWidget(row, 0)
+            if checkbox and checkbox.isChecked():
+                selected_indices.append(row)
+
+        return selected_indices
 
     def update_plots(self):
         """Update the virtual elevation plots for out-and-back analysis"""
@@ -1647,7 +1348,7 @@ class OutAndBackResult(QMainWindow):
             )
 
         self.fig_canvas.fig.tight_layout()
-        self.fig_canvas.draw()
+        self.fig_canvas.draw_idle()
 
     def on_trim_start_changed(self, value):
         """Handle trim start slider value change"""
@@ -1668,21 +1369,19 @@ class OutAndBackResult(QMainWindow):
             self.gps_marker_a_slider.setValue(value)
             self.gps_marker_a_pos = value
             self.gps_marker_a_label.setText(f"{value} s")
+            self.map_widget.set_marker_a_pos(self.gps_marker_a_pos)
 
         if self.gps_marker_b_pos < value:
             self.gps_marker_b_slider.setValue(value)
             self.gps_marker_b_pos = value
             self.gps_marker_b_label.setText(f"{value} s")
+            self.map_widget.set_marker_b_pos(self.gps_marker_b_pos)
 
-        # Detect sections based on new trim values
-        self.detect_sections()
-
-        # Recalculate VE metrics and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(True)
 
         # Update map to show trim points
-        self.create_map()
+        self.map_widget.set_trim_start(self.trim_start)
+        self.map_widget.update()
 
     def on_trim_end_changed(self, value):
         """Handle trim end slider value change"""
@@ -1703,60 +1402,48 @@ class OutAndBackResult(QMainWindow):
             self.gps_marker_a_slider.setValue(value)
             self.gps_marker_a_pos = value
             self.gps_marker_a_label.setText(f"{value} s")
+            self.map_widget.set_marker_a_pos(self.gps_marker_a_pos)
 
         if self.gps_marker_b_pos > value:
             self.gps_marker_b_slider.setValue(value)
             self.gps_marker_b_pos = value
             self.gps_marker_b_label.setText(f"{value} s")
+            self.map_widget.set_marker_b_pos(self.gps_marker_b_pos)
 
-        # Detect sections based on new trim values
-        self.detect_sections()
-
-        # Recalculate VE metrics and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(True)
 
         # Update map to show trim points
-        self.create_map()
+        self.map_widget.set_trim_end(self.trim_end)
+        self.map_widget.update()
 
     def on_gps_marker_a_changed(self, value):
         """Handle GPS marker A slider value change"""
         self.gps_marker_a_pos = value
         self.gps_marker_a_label.setText(f"{value} s")
+        self.map_widget.set_marker_a_pos(self.gps_marker_a_pos)
 
-        # Detect sections based on new marker position
-        self.detect_sections()
-
-        # Recalculate VE metrics and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(True)
 
         # Update map to show markers
-        self.create_map()
+        self.map_widget.update()
 
     def on_gps_marker_b_changed(self, value):
         """Handle GPS marker B slider value change"""
         self.gps_marker_b_pos = value
         self.gps_marker_b_label.setText(f"{value} s")
+        self.map_widget.set_marker_b_pos(self.gps_marker_b_pos)
 
-        # Detect sections based on new marker position
-        self.detect_sections()
-
-        # Recalculate VE metrics and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(True)
 
         # Update map to show markers
-        self.create_map()
+        self.map_widget.update()
 
     def on_cda_changed(self, value):
         """Handle CdA slider value change"""
         self.current_cda = value / 1000.0
         self.cda_label.setText(f"{self.current_cda:.3f}")
 
-        # Recalculate VE and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(False)
         self.update_config_text()
 
     def on_crr_changed(self, value):
@@ -1764,9 +1451,7 @@ class OutAndBackResult(QMainWindow):
         self.current_crr = value / 10000.0
         self.crr_label.setText(f"{self.current_crr:.4f}")
 
-        # Recalculate VE and update plots
-        self.calculate_ve()
-        self.update_plots()
+        self.async_update(False)
         self.update_config_text()
 
     def save_results(self):
@@ -1944,43 +1629,36 @@ class OutAndBackResult(QMainWindow):
 
     def back_to_selection(self):
         """Return to lap selection window"""
-        from ui.analysis_window import AnalysisWindow
-
-        self.analysis_window = AnalysisWindow(self.fit_file, self.settings)
-        self.analysis_window.show()
+        self.parent.show()
         self.close()
 
-    def map_time_to_route_index(self, time_index):
-        """
-        Map a time index from the full dataset to the corresponding index in route_points
+    def async_update(self, detect_sections):
+        values = {}
+        for key in VEWorker.INPUT_KEYS:
+            values[key] = getattr(self, key)
+        values["detect_sections"] = detect_sections and self.has_gps
+        self.ve_worker.set_values(values)
 
-        Parameters:
-        -----------
-        time_index : int
-            Index in the merged_data dataframe
+    def on_ve_result_ready(self, res):
+        for key in VEWorker.RESULT_KEYS:
+            if key in res:
+                setattr(self, key, res[key])
 
-        Returns:
-        --------
-        int
-            Corresponding index in the route_points list, or None if not mappable
-        """
-        if not hasattr(self, "route_timestamps") or not self.route_timestamps:
-            return None
+        if res["detect_sections"]:
+            # Update the section table
+            self.update_section_table()
 
-        if time_index < 0 or time_index >= len(self.merged_data):
-            return None
+        self.update_plots()
 
-        # Get the timestamp at this index
-        target_timestamp = self.merged_data["timestamp"].iloc[time_index]
+    def join_threads(self):
+        if self.map_widget:
+            self.map_widget.close()
+            self.map_widget = None
+        if self.ve_thread:
+            self.ve_thread.quit()
+            self.ve_thread.wait()
+            self.ve_thread = None
 
-        # Find the closest timestamp in route_timestamps
-        if target_timestamp in self.route_timestamps:
-            return self.route_timestamps.index(target_timestamp)
-
-        # If not found directly, find the closest one
-        for i, ts in enumerate(self.route_timestamps):
-            if ts >= target_timestamp:
-                return i
-
-        # If we get here, target_timestamp is after all route_timestamps
-        return len(self.route_timestamps) - 1
+    def closeEvent(self, event):
+        self.join_threads()
+        event.accept()
