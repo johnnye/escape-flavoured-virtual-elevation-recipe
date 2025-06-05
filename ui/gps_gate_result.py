@@ -70,7 +70,6 @@ class GPSGateResult(QMainWindow):
         # Initialize these attributes BEFORE calling prepare_merged_data
         self.trim_start = 0
         self.trim_end = 0
-        self.calibration_end = 0  # End of calibration lap
 
         # Prepare merged lap data
         self.prepare_merged_data()
@@ -135,9 +134,6 @@ class GPSGateResult(QMainWindow):
 
         # Setup UI
         self.initUI()
-
-        # Update the calibration end
-        self.update_calibration_end()
 
         # Detect sections based on gates
         self.detect_sections()
@@ -604,36 +600,6 @@ class GPSGateResult(QMainWindow):
             self.map_widget.set_gate_sets(self.gate_sets, self.detected_sections)
             self.map_widget.update()
 
-    def update_calibration_end(self):
-        """Update the calibration end point based on gate A's first passing"""
-        if not self.gate_sets:
-            self.calibration_end = self.trim_end
-            return
-
-        # Calibration end is when gate A is passed again in the same direction
-        # or trim_end if that doesn't happen
-        self.calibration_end = self.trim_end
-
-        # Detect when gate A is passed again with same direction
-        gate_a_passings = self.detect_gate_passings(
-            self.gate_sets[0]["gate_a_pos"], self.trim_start, self.trim_end
-        )
-
-        # Need at least two passings in the same direction to end calibration early
-        if len(gate_a_passings) >= 2:
-            # The first passing defines the reference direction
-            ref_direction = gate_a_passings[0]["direction"]
-
-            # Look for next passing in same direction
-            for passing in gate_a_passings[1:]:
-                # Check if direction is similar (within 30 degrees)
-                dir_diff = abs(passing["direction"] - ref_direction)
-                dir_diff = min(dir_diff, 360 - dir_diff)
-
-                if dir_diff < 30:  # Similar direction
-                    self.calibration_end = passing["index"]
-                    break
-
     def update_config_text(self):
         """Update the configuration text display"""
         lap_str = ", ".join(map(str, self.selected_laps))
@@ -809,9 +775,6 @@ class GPSGateResult(QMainWindow):
 
         if not self.has_gps or not self.gate_sets:
             return
-
-        # Update the calibration end first
-        self.update_calibration_end()
 
         # Process each gate set
         for gate_set_idx, gate_set in enumerate(self.gate_sets):
@@ -1400,10 +1363,6 @@ class GPSGateResult(QMainWindow):
         self.gate_sets[gate_index]["gate_a_pos"] = value
         self.gate_controls[gate_index].gate_a_label.setText(f"{value} s")
 
-        # If this is the first gate, update calibration end
-        if gate_index == 0:
-            self.update_calibration_end()
-
         # Update subsequent gates if needed
         for i in range(gate_index + 1, len(self.gate_sets)):
             if self.gate_sets[i]["gate_a_pos"] <= value:
@@ -1499,9 +1458,6 @@ class GPSGateResult(QMainWindow):
                     gate_control.gate_b_slider.setValue(value + 1)
                     gate_control.gate_b_label.setText(f"{value + 1} s")
 
-        # Update calibration end
-        self.update_calibration_end()
-
         # Detect sections based on new trim values
         self.detect_sections()
 
@@ -1540,9 +1496,6 @@ class GPSGateResult(QMainWindow):
                     self.gate_sets[i]["gate_a_pos"] = value - 1
                     gate_control.gate_a_slider.setValue(value - 1)
                     gate_control.gate_a_label.setText(f"{value - 1} s")
-
-        # Update calibration end
-        self.update_calibration_end()
 
         # Detect sections based on new trim values
         self.detect_sections()
