@@ -212,7 +212,7 @@ class FileSelector(QMainWindow):
         self.join_thread(False)
 
         if fit_file.elevation_error_rate != 0:
-            elevation_error_rate = int(file_file.elevation_error_rate * 100)
+            elevation_error_rate = int(fit_file.elevation_error_rate * 100)
             QMessageBox.warning(self, "Invalid DEM File",
                                 f"Could not correct {elevation_error_rate}% of altitude points")
 
