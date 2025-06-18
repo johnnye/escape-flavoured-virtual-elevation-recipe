@@ -53,7 +53,9 @@ class AltitudeLookup:
                 local_c = int(row["col"] - tile_c * self.TILE_SIZE)
 
                 if (0 <= local_r < tile.shape[0]) and (0 <= local_c < tile.shape[1]):
-                    altitudes[idx] = tile[local_r, local_c]
+                    value = tile[local_r, local_c]
+                    if value != self.dataset.nodata:
+                        altitudes[idx] = value
 
         return altitudes
 
