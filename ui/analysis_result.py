@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QSlider,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
@@ -25,6 +24,7 @@ from PySide6.QtWidgets import (
 from models.virtual_elevation import VirtualElevation
 from ui.async_worker import AsyncWorker
 from ui.map_widget import MapMode, MapWidget
+from ui.slider_textbox import SliderTextBox
 from ui.ve_plot import VEFigure, VEPlotLabel, VEPlotSaver
 
 
@@ -573,62 +573,52 @@ class AnalysisResult(QMainWindow):
         slider_layout = QFormLayout()
 
         # Trim start slider
-        self.trim_start_slider = QSlider(Qt.Horizontal)
-        self.trim_start_slider.setMinimum(0)
-        self.trim_start_slider.setMaximum(len(self.merged_data) - 30)
-        self.trim_start_slider.setValue(self.trim_start)  # Use the loaded trim value
+        self.trim_start_slider = SliderTextBox(
+            minimum=0,
+            maximum=len(self.merged_data) - 30,
+            value=self.trim_start,
+            is_float=False
+        )
         self.trim_start_slider.valueChanged.connect(self.on_trim_start_changed)
 
-        self.trim_start_label = QLabel(f"{self.trim_start} s")
-        trim_start_layout = QHBoxLayout()
-        trim_start_layout.addWidget(self.trim_start_slider)
-        trim_start_layout.addWidget(self.trim_start_label)
-
-        slider_layout.addRow("Trim Start:", trim_start_layout)
+        slider_layout.addRow("Trim Start (s):", self.trim_start_slider)
 
         # Trim end slider
-        self.trim_end_slider = QSlider(Qt.Horizontal)
-        self.trim_end_slider.setMinimum(30)
-        self.trim_end_slider.setMaximum(len(self.merged_data))
-        self.trim_end_slider.setValue(self.trim_end)  # Use the loaded trim value
+        self.trim_end_slider = SliderTextBox(
+            minimum=30,
+            maximum=len(self.merged_data),
+            value=self.trim_end,
+            is_float=False
+        )
         self.trim_end_slider.valueChanged.connect(self.on_trim_end_changed)
 
-        self.trim_end_label = QLabel(f"{self.trim_end} s")
-        trim_end_layout = QHBoxLayout()
-        trim_end_layout.addWidget(self.trim_end_slider)
-        trim_end_layout.addWidget(self.trim_end_label)
-
-        slider_layout.addRow("Trim End:", trim_end_layout)
+        slider_layout.addRow("Trim End (s):", self.trim_end_slider)
 
         # CdA slider
-        self.cda_slider = QSlider(Qt.Horizontal)
-        self.cda_slider.setMinimum(int(self.params.get("cda_min", 0.15) * 1000))
-        self.cda_slider.setMaximum(int(self.params.get("cda_max", 0.5) * 1000))
-        self.cda_slider.setValue(int(self.current_cda * 1000))
+        self.cda_slider = SliderTextBox(
+            minimum=self.params.get("cda_min", 0.15),
+            maximum=self.params.get("cda_max", 0.5),
+            value=self.current_cda,
+            is_float=True,
+            decimals=3
+        )
         self.cda_slider.valueChanged.connect(self.on_cda_changed)
-        self.cda_slider.setEnabled(self.params.get("cda") is None)
+        self.cda_slider.set_enabled(self.params.get("cda") is None)
 
-        self.cda_label = QLabel(f"{self.current_cda:.3f}")
-        cda_layout = QHBoxLayout()
-        cda_layout.addWidget(self.cda_slider)
-        cda_layout.addWidget(self.cda_label)
-
-        slider_layout.addRow("CdA:", cda_layout)
+        slider_layout.addRow("CdA:", self.cda_slider)
 
         # Crr slider
-        self.crr_slider = QSlider(Qt.Horizontal)
-        self.crr_slider.setMinimum(int(self.params.get("crr_min", 0.001) * 10000))
-        self.crr_slider.setMaximum(int(self.params.get("crr_max", 0.03) * 10000))
-        self.crr_slider.setValue(int(self.current_crr * 10000))
+        self.crr_slider = SliderTextBox(
+            minimum=self.params.get("crr_min", 0.001),
+            maximum=self.params.get("crr_max", 0.03),
+            value=self.current_crr,
+            is_float=True,
+            decimals=4
+        )
         self.crr_slider.valueChanged.connect(self.on_crr_changed)
-        self.crr_slider.setEnabled(self.params.get("crr") is None)
+        self.crr_slider.set_enabled(self.params.get("crr") is None)
 
-        self.crr_label = QLabel(f"{self.current_crr:.4f}")
-        crr_layout = QHBoxLayout()
-        crr_layout.addWidget(self.crr_slider)
-        crr_layout.addWidget(self.crr_label)
-
-        slider_layout.addRow("Crr:", crr_layout)
+        slider_layout.addRow("Crr:", self.crr_slider)
 
         slider_group.setLayout(slider_layout)
         right_layout.addWidget(slider_group, 1)
@@ -674,12 +664,11 @@ class AnalysisResult(QMainWindow):
     def on_trim_start_changed(self, value):
         """Handle trim start slider value change"""
         # Ensure trim_start < trim_end - 30
-        if value >= self.trim_end_slider.value() - 30:
-            self.trim_start_slider.setValue(self.trim_end_slider.value() - 30)
+        if value >= self.trim_end_slider.get_value() - 30:
+            self.trim_start_slider.set_value(self.trim_end_slider.get_value() - 30)
             return
 
-        self.trim_start = value
-        self.trim_start_label.setText(f"{value} s")
+        self.trim_start = int(value)
 
         self.async_update()
 
@@ -690,12 +679,11 @@ class AnalysisResult(QMainWindow):
     def on_trim_end_changed(self, value):
         """Handle trim end slider value change"""
         # Ensure trim_end > trim_start + 30
-        if value <= self.trim_start_slider.value() + 30:
-            self.trim_end_slider.setValue(self.trim_start_slider.value() + 30)
+        if value <= self.trim_start_slider.get_value() + 30:
+            self.trim_end_slider.set_value(self.trim_start_slider.get_value() + 30)
             return
 
-        self.trim_end = value
-        self.trim_end_label.setText(f"{value} s")
+        self.trim_end = int(value)
 
         self.async_update()
 
@@ -704,8 +692,7 @@ class AnalysisResult(QMainWindow):
 
     def on_cda_changed(self, value):
         """Handle CdA slider value change"""
-        self.current_cda = value / 1000.0
-        self.cda_label.setText(f"{self.current_cda:.3f}")
+        self.current_cda = value
 
         self.async_update()
 
@@ -713,8 +700,7 @@ class AnalysisResult(QMainWindow):
 
     def on_crr_changed(self, value):
         """Handle Crr slider value change"""
-        self.current_crr = value / 10000.0
-        self.crr_label.setText(f"{self.current_crr:.4f}")
+        self.current_crr = value
 
         self.async_update()
 

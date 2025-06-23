@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QSlider,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -29,6 +28,7 @@ from PySide6.QtWidgets import (
 from models.virtual_elevation import VirtualElevation
 from ui.async_worker import AsyncWorker
 from ui.map_widget import MapMode, MapWidget
+from ui.slider_textbox import SliderTextBox
 from ui.ve_plot import VEFigure, VEPlotLabel, VEPlotSaver
 
 
@@ -806,6 +806,11 @@ class GPSLapResult(QMainWindow):
             ["Select", "Lap", "Duration", "Distance"]
         )
         lap_table_layout.addWidget(self.lap_table)
+        
+        # Add select/deselect all button
+        self.select_all_laps_button = QPushButton("Select All Laps")
+        self.select_all_laps_button.clicked.connect(self.toggle_all_laps_selection)
+        lap_table_layout.addWidget(self.select_all_laps_button)
 
         lap_table_group.setLayout(lap_table_layout)
         left_layout.addWidget(lap_table_group, 1)
@@ -865,76 +870,63 @@ class GPSLapResult(QMainWindow):
         slider_layout = QFormLayout()
 
         # Trim start slider
-        self.trim_start_slider = QSlider(Qt.Horizontal)
-        self.trim_start_slider.setMinimum(0)
-        self.trim_start_slider.setMaximum(len(self.merged_data) - 30)
-        self.trim_start_slider.setValue(self.trim_start)  # Use the loaded trim value
+        self.trim_start_slider = SliderTextBox(
+            minimum=0,
+            maximum=len(self.merged_data) - 30,
+            value=self.trim_start,
+            is_float=False
+        )
         self.trim_start_slider.valueChanged.connect(self.on_trim_start_changed)
 
-        self.trim_start_label = QLabel(f"{self.trim_start} s")
-        trim_start_layout = QHBoxLayout()
-        trim_start_layout.addWidget(self.trim_start_slider)
-        trim_start_layout.addWidget(self.trim_start_label)
-
-        slider_layout.addRow("Trim Start:", trim_start_layout)
+        slider_layout.addRow("Trim Start (s):", self.trim_start_slider)
 
         # Trim end slider
-        self.trim_end_slider = QSlider(Qt.Horizontal)
-        self.trim_end_slider.setMinimum(30)
-        self.trim_end_slider.setMaximum(len(self.merged_data))
-        self.trim_end_slider.setValue(self.trim_end)  # Use the loaded trim value
+        self.trim_end_slider = SliderTextBox(
+            minimum=30,
+            maximum=len(self.merged_data),
+            value=self.trim_end,
+            is_float=False
+        )
         self.trim_end_slider.valueChanged.connect(self.on_trim_end_changed)
 
-        self.trim_end_label = QLabel(f"{self.trim_end} s")
-        trim_end_layout = QHBoxLayout()
-        trim_end_layout.addWidget(self.trim_end_slider)
-        trim_end_layout.addWidget(self.trim_end_label)
-
-        slider_layout.addRow("Trim End:", trim_end_layout)
+        slider_layout.addRow("Trim End (s):", self.trim_end_slider)
 
         # GPS Marker slider
-        self.gps_marker_slider = QSlider(Qt.Horizontal)
-        self.gps_marker_slider.setMinimum(self.trim_start)
-        self.gps_marker_slider.setMaximum(self.trim_end)
-        self.gps_marker_slider.setValue(self.gps_marker_pos)
+        self.gps_marker_slider = SliderTextBox(
+            minimum=self.trim_start,
+            maximum=self.trim_end,
+            value=self.gps_marker_pos,
+            is_float=False
+        )
         self.gps_marker_slider.valueChanged.connect(self.on_gps_marker_changed)
 
-        self.gps_marker_label = QLabel(f"{self.gps_marker_pos} s")
-        gps_marker_layout = QHBoxLayout()
-        gps_marker_layout.addWidget(self.gps_marker_slider)
-        gps_marker_layout.addWidget(self.gps_marker_label)
-
-        slider_layout.addRow("GPS Marker:", gps_marker_layout)
+        slider_layout.addRow("GPS Marker (s):", self.gps_marker_slider)
 
         # CdA slider
-        self.cda_slider = QSlider(Qt.Horizontal)
-        self.cda_slider.setMinimum(int(self.params.get("cda_min", 0.15) * 1000))
-        self.cda_slider.setMaximum(int(self.params.get("cda_max", 0.5) * 1000))
-        self.cda_slider.setValue(int(self.current_cda * 1000))
+        self.cda_slider = SliderTextBox(
+            minimum=self.params.get("cda_min", 0.15),
+            maximum=self.params.get("cda_max", 0.5),
+            value=self.current_cda,
+            is_float=True,
+            decimals=3
+        )
         self.cda_slider.valueChanged.connect(self.on_cda_changed)
-        self.cda_slider.setEnabled(self.params.get("cda") is None)
+        self.cda_slider.set_enabled(self.params.get("cda") is None)
 
-        self.cda_label = QLabel(f"{self.current_cda:.3f}")
-        cda_layout = QHBoxLayout()
-        cda_layout.addWidget(self.cda_slider)
-        cda_layout.addWidget(self.cda_label)
-
-        slider_layout.addRow("CdA:", cda_layout)
+        slider_layout.addRow("CdA:", self.cda_slider)
 
         # Crr slider
-        self.crr_slider = QSlider(Qt.Horizontal)
-        self.crr_slider.setMinimum(int(self.params.get("crr_min", 0.001) * 10000))
-        self.crr_slider.setMaximum(int(self.params.get("crr_max", 0.03) * 10000))
-        self.crr_slider.setValue(int(self.current_crr * 10000))
+        self.crr_slider = SliderTextBox(
+            minimum=self.params.get("crr_min", 0.001),
+            maximum=self.params.get("crr_max", 0.03),
+            value=self.current_crr,
+            is_float=True,
+            decimals=4
+        )
         self.crr_slider.valueChanged.connect(self.on_crr_changed)
-        self.crr_slider.setEnabled(self.params.get("crr") is None)
+        self.crr_slider.set_enabled(self.params.get("crr") is None)
 
-        self.crr_label = QLabel(f"{self.current_crr:.4f}")
-        crr_layout = QHBoxLayout()
-        crr_layout.addWidget(self.crr_slider)
-        crr_layout.addWidget(self.crr_label)
-
-        slider_layout.addRow("Crr:", crr_layout)
+        slider_layout.addRow("Crr:", self.crr_slider)
 
         slider_group.setLayout(slider_layout)
         right_layout.addWidget(slider_group, 1)
@@ -1016,6 +1008,10 @@ class GPSLapResult(QMainWindow):
         for i in range(1, 4):
             header.setSectionResizeMode(i, QHeaderView.Stretch)
 
+        # Update button text based on current selection (all items are selected by default)
+        if len(self.detected_laps) > 0:
+            self.select_all_laps_button.setText("Deselect All Laps")
+
         self.selected_lap_indices = self.get_selected_lap_indices()
         # Chicken-Egg situation here, selected_lap_indices can be found after a
         # background calculation and UI query
@@ -1034,24 +1030,48 @@ class GPSLapResult(QMainWindow):
 
         return selected_indices
 
+    def toggle_all_laps_selection(self):
+        """Toggle selection of all laps based on current state"""
+        # Check current state - count selected checkboxes
+        selected_count = 0
+        total_count = self.lap_table.rowCount()
+        
+        for row in range(total_count):
+            checkbox = self.lap_table.cellWidget(row, 0)
+            if checkbox and checkbox.isChecked():
+                selected_count += 1
+        
+        # Determine action: if any are selected, deselect all; if none selected, select all
+        select_all = (selected_count == 0)
+        
+        # Apply the action
+        for row in range(total_count):
+            checkbox = self.lap_table.cellWidget(row, 0)
+            if checkbox:
+                checkbox.setChecked(select_all)
+        
+        # Update button text
+        if select_all:
+            self.select_all_laps_button.setText("Deselect All Laps")
+        else:
+            self.select_all_laps_button.setText("Select All Laps")
+
     def on_trim_start_changed(self, value):
         """Handle trim start slider value change"""
         # Ensure trim_start < trim_end - 30
-        if value >= self.trim_end_slider.value() - 30:
-            self.trim_start_slider.setValue(self.trim_end_slider.value() - 30)
+        if value >= self.trim_end_slider.get_value() - 30:
+            self.trim_start_slider.set_value(self.trim_end_slider.get_value() - 30)
             return
 
-        self.trim_start = value
-        self.trim_start_label.setText(f"{value} s")
+        self.trim_start = int(value)
 
         # Update GPS marker slider bounds
-        self.gps_marker_slider.setMinimum(value)
+        self.gps_marker_slider.set_range(value, self.gps_marker_slider.maximum)
 
         # Ensure GPS marker is within bounds
         if self.gps_marker_pos < value:
-            self.gps_marker_slider.setValue(value)
+            self.gps_marker_slider.set_value(value)
             self.gps_marker_pos = value
-            self.gps_marker_label.setText(f"{value} s")
             self.map_widget.set_marker_pos(value)
 
         self.async_update(True)
@@ -1063,21 +1083,19 @@ class GPSLapResult(QMainWindow):
     def on_trim_end_changed(self, value):
         """Handle trim end slider value change"""
         # Ensure trim_end > trim_start + 30
-        if value <= self.trim_start_slider.value() + 30:
-            self.trim_end_slider.setValue(self.trim_start_slider.value() + 30)
+        if value <= self.trim_start_slider.get_value() + 30:
+            self.trim_end_slider.set_value(self.trim_start_slider.get_value() + 30)
             return
 
-        self.trim_end = value
-        self.trim_end_label.setText(f"{value} s")
+        self.trim_end = int(value)
 
         # Update GPS marker slider bounds
-        self.gps_marker_slider.setMaximum(value)
+        self.gps_marker_slider.set_range(self.gps_marker_slider.minimum, value)
 
         # Ensure GPS marker is within bounds
         if self.gps_marker_pos > value:
-            self.gps_marker_slider.setValue(value)
+            self.gps_marker_slider.set_value(value)
             self.gps_marker_pos = value
-            self.gps_marker_label.setText(f"{value} s")
             self.map_widget.set_marker_pos(value)
 
         self.async_update(True)
@@ -1087,8 +1105,7 @@ class GPSLapResult(QMainWindow):
 
     def on_gps_marker_changed(self, value):
         """Handle GPS marker slider value change"""
-        self.gps_marker_pos = value
-        self.gps_marker_label.setText(f"{value} s")
+        self.gps_marker_pos = int(value)
 
         self.async_update(True)
 
@@ -1098,8 +1115,7 @@ class GPSLapResult(QMainWindow):
 
     def on_cda_changed(self, value):
         """Handle CdA slider value change"""
-        self.current_cda = value / 1000.0
-        self.cda_label.setText(f"{self.current_cda:.3f}")
+        self.current_cda = value
 
         self.async_update(detect_laps=False)
 
@@ -1107,8 +1123,7 @@ class GPSLapResult(QMainWindow):
 
     def on_crr_changed(self, value):
         """Handle Crr slider value change"""
-        self.current_crr = value / 10000.0
-        self.crr_label.setText(f"{self.current_crr:.4f}")
+        self.current_crr = value
 
         self.async_update(detect_laps=False)
 
