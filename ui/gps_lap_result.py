@@ -661,16 +661,16 @@ class GPSLapResult(QMainWindow):
             # Use saved trim values if available
             self.trim_start = saved_trim["trim_start"]
             self.trim_end = saved_trim["trim_end"]
-            # Use saved GPS marker position if available
+            # Use saved GPS marker position if available, otherwise force to 0s (trim_start)
             self.gps_marker_pos = saved_trim.get(
-                "gps_marker_pos", int((self.trim_start + self.trim_end) / 2)
+                "gps_marker_pos", self.trim_start
             )
         else:
             # Use defaults
             self.trim_start = 0
             self.trim_end = len(self.merged_data) - 1
-            # Default GPS marker to the middle of the selected range
-            self.gps_marker_pos = int((self.trim_start + self.trim_end) / 2)
+            # Force GPS marker to start at 0s (trim_start)
+            self.gps_marker_pos = self.trim_start
 
         # Initialize values for CdA and Crr
         self.current_cda = self.params.get("cda")
