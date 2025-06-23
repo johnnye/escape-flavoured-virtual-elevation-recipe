@@ -1,12 +1,10 @@
 import csv
-import io
 import os
 from datetime import datetime
 from pathlib import Path
 
-import folium
 import numpy as np
-from PySide6.QtCore import (Qt, QThread)
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -19,7 +17,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QSizePolicy,
     QSlider,
     QSplitter,
     QTableWidget,
@@ -30,9 +27,10 @@ from PySide6.QtWidgets import (
 )
 
 from models.virtual_elevation import VirtualElevation
-from ui.map_widget import (MapWidget, MapMode)
 from ui.async_worker import AsyncWorker
-from ui.ve_plot import VEPlotLabel, VEFigure, VEPlotSaver
+from ui.map_widget import MapMode, MapWidget
+from ui.ve_plot import VEFigure, VEPlotLabel, VEPlotSaver
+
 
 class VEWorker(AsyncWorker):
     INPUT_KEYS = [
@@ -914,6 +912,7 @@ class VEWorker(AsyncWorker):
 
         self.fig_res = ve_fig.draw()
 
+
 class OutAndBackResult(QMainWindow):
     """Window for displaying Out-and-Back analysis results"""
 
@@ -941,8 +940,9 @@ class OutAndBackResult(QMainWindow):
         self.ve_thread = QThread()
         self.ve_worker.moveToThread(self.ve_thread)
         self.ve_worker.resultReady.connect(self.on_ve_result_ready)
-        self.ve_plot_saver = VEPlotSaver(VEWorker(self.merged_data, self.params),
-                                         self.ve_thread)
+        self.ve_plot_saver = VEPlotSaver(
+            VEWorker(self.merged_data, self.params), self.ve_thread
+        )
         self.ve_thread.start()
         QApplication.instance().aboutToQuit.connect(self.join_threads)
 
@@ -1015,7 +1015,10 @@ class OutAndBackResult(QMainWindow):
 
         # Check if we have enough data
         if len(self.merged_data) < 30:
-            raise ValueError("Not enough data points (less than 30 seconds)")
+            error_msg = f"Not enough data points for analysis: {len(self.merged_data)} data points found (minimum 30 required)"
+            if hasattr(self, "selected_laps") and self.selected_laps:
+                error_msg += f"\nSelected laps: {self.selected_laps}"
+            raise ValueError(error_msg)
 
         # Get lap info for display
         self.lap_info = []
@@ -1304,7 +1307,9 @@ class OutAndBackResult(QMainWindow):
             # Checkbox for selection
             checkbox = QCheckBox()
             checkbox.setChecked(True)  # All sections selected by default
-            checkbox.stateChanged.connect(lambda: self.async_update(detect_sections=False))
+            checkbox.stateChanged.connect(
+                lambda: self.async_update(detect_sections=False)
+            )
             self.section_table.setCellWidget(row, 0, checkbox)
 
             # Section number
@@ -1337,7 +1342,10 @@ class OutAndBackResult(QMainWindow):
         self.selected_section_indices = self.get_selected_section_indices()
         # Chicken-Egg situation here, selected_lap_indices can be found after a
         # background calculation and UI query
-        if not hasattr(self, "_triggered_section_update") and self.selected_section_indices:
+        if (
+            not hasattr(self, "_triggered_section_update")
+            and self.selected_section_indices
+        ):
             self._triggered_section_update = True
             self.async_update()
 

@@ -1,11 +1,11 @@
+import numpy as np
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from matplotlib.figure import Figure
+from matplotlib.gridspec import GridSpec
 from PySide6.QtCore import Signal
-from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel, QSizePolicy
 
-from matplotlib.gridspec import GridSpec
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-import numpy as np
 
 class VEPlotLabel(QLabel):
     sizeChanged = Signal()
@@ -28,16 +28,21 @@ class VEPlotLabel(QLabel):
 
     def get_size_info(self):
         self.pixel_ratio = self.screen.devicePixelRatio()
-        return {"logical_dpi": self.screen.logicalDotsPerInch(),
-                "width": self.width(),
-                "height": self.height(),
-                "pixel_ratio": self.pixel_ratio}
+        return {
+            "logical_dpi": self.screen.logicalDotsPerInch(),
+            "width": self.width(),
+            "height": self.height(),
+            "pixel_ratio": self.pixel_ratio,
+        }
 
     def set_fig(self, res):
-        image = QImage(res["buf"].data, res["width"], res["height"], QImage.Format_RGBA8888)
+        image = QImage(
+            res["buf"].data, res["width"], res["height"], QImage.Format_RGBA8888
+        )
         pixmap = QPixmap.fromImage(image)
         pixmap.setDevicePixelRatio(self.pixel_ratio)
         self.setPixmap(pixmap)
+
 
 class VEFigure:
     def __init__(self, size_info):
@@ -65,11 +70,11 @@ class VEFigure:
         self.canvas.draw()
         width, height = self.canvas.get_width_height()
 
-        fig_buf = np.frombuffer(self.canvas.buffer_rgba(),
-                                dtype=np.uint8).reshape((width, height, 4))
-        return {"buf": fig_buf,
-                "width": width,
-                "height": height}
+        fig_buf = np.frombuffer(self.canvas.buffer_rgba(), dtype=np.uint8).reshape(
+            (width, height, 4)
+        )
+        return {"buf": fig_buf, "width": width, "height": height}
+
 
 class VEPlotSaver:
     def __init__(self, worker, thread):
@@ -80,15 +85,21 @@ class VEPlotSaver:
     def save(self, values, plot_path, width=3840, height=2160, dpi=200):
         self.plot_path = plot_path
 
-        values["plot_size_info"] = {"logical_dpi": dpi,
-                                    "width": width,
-                                    "height": height,
-                                    "pixel_ratio": 1.0}
+        values["plot_size_info"] = {
+            "logical_dpi": dpi,
+            "width": width,
+            "height": height,
+            "pixel_ratio": 1.0,
+        }
         self.worker.set_values(values)
 
     def on_ve_result_ready(self, res):
         fig_res = res["fig_res"]
-        image = QImage(fig_res["buf"].data, fig_res["width"], fig_res["height"],
-                       QImage.Format_RGBA8888)
+        image = QImage(
+            fig_res["buf"].data,
+            fig_res["width"],
+            fig_res["height"],
+            QImage.Format_RGBA8888,
+        )
         pixmap = QPixmap.fromImage(image)
         pixmap.save(self.plot_path, "PNG")
