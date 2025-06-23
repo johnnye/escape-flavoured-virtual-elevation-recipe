@@ -841,17 +841,18 @@ class GPSGateResult(QMainWindow):
         """Add a new gate set with default positions"""
         # Set default gate positions
         if not self.gate_sets:
-            # First gate set
-            gate_a_pos = self.trim_start + int((self.trim_end - self.trim_start) * 0.25)
-            gate_b_pos = self.trim_start + int((self.trim_end - self.trim_start) * 0.75)
+            # First gate set - force gate A to start at 0s (trim_start) and gate B at A + 30s
+            gate_a_pos = self.trim_start
+            gate_b_pos = self.trim_start + 30
         else:
             # Subsequent gate sets - position after the last one
             last_gate_b = self.gate_sets[-1]["gate_b_pos"]
             remaining_range = self.trim_end - last_gate_b
 
             if remaining_range > 30:
-                gate_a_pos = last_gate_b + int(remaining_range * 0.33)
-                gate_b_pos = last_gate_b + int(remaining_range * 0.67)
+                # Force gate A to start at trim_start and gate B at A + 30s for A-B gates
+                gate_a_pos = self.trim_start
+                gate_b_pos = self.trim_start + 30
             else:
                 # Not enough room for another gate
                 return False

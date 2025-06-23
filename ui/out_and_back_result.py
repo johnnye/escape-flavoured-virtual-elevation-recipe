@@ -960,26 +960,22 @@ class OutAndBackResult(QMainWindow):
             # Use saved trim values if available
             self.trim_start = saved_trim["trim_start"]
             self.trim_end = saved_trim["trim_end"]
-            # Use saved GPS marker positions if available
+            # Use saved GPS marker positions if available, otherwise force A=0s, B=A+30s
             self.gps_marker_a_pos = saved_trim.get(
                 "gps_marker_a_pos",
-                int(self.trim_start + (self.trim_end - self.trim_start) * 0.25),
+                self.trim_start,
             )
             self.gps_marker_b_pos = saved_trim.get(
                 "gps_marker_b_pos",
-                int(self.trim_start + (self.trim_end - self.trim_start) * 0.75),
+                self.trim_start + 30,
             )
         else:
             # Use defaults
             self.trim_start = 0
             self.trim_end = len(self.merged_data) - 1
-            # Default GPS markers to 1/4 and 3/4 of the selected range
-            self.gps_marker_a_pos = int(
-                self.trim_start + (self.trim_end - self.trim_start) * 0.25
-            )
-            self.gps_marker_b_pos = int(
-                self.trim_start + (self.trim_end - self.trim_start) * 0.75
-            )
+            # Force GPS marker A to start at 0s (trim_start) and marker B at A + 30s
+            self.gps_marker_a_pos = self.trim_start
+            self.gps_marker_b_pos = self.trim_start + 30
 
         # Initialize values for CdA and Crr
         self.current_cda = self.params.get("cda")
