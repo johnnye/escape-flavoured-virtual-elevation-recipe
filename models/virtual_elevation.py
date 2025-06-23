@@ -1,5 +1,9 @@
+import logging
+
 import matplotlib.pyplot as plt
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class VirtualElevation:
@@ -53,6 +57,8 @@ class VirtualElevation:
         """
         # Make a copy to avoid modifying the original data
         self.df = self.data.copy()
+        initial_count = len(self.df)
+        logger.debug(f"VirtualElevation: Initial data count: {initial_count}")
 
         # Ensure speed is properly extracted (always in m/s from FIT files)
         if "speed" in self.df.columns:
@@ -70,6 +76,14 @@ class VirtualElevation:
         if "altitude" in self.df.columns:
             self.df["elevation"] = self.df["altitude"]
 
+        # Log data quality before processing
+        zero_speed_count = (self.df["v"] == 0).sum()
+        nan_speed_count = self.df["v"].isna().sum()
+        nan_power_count = self.df["watts"].isna().sum()
+        logger.debug(
+            f"VirtualElevation: Zero speed: {zero_speed_count}, NaN speed: {nan_speed_count}, NaN power: {nan_power_count}"
+        )
+
         # Handle zero speed (set to 0.001 as in the R code)
         self.df.loc[self.df["v"] == 0, "v"] = 0.001
 
@@ -82,6 +96,10 @@ class VirtualElevation:
         else:
             # Set a default value of 0 for wind speed
             self.df["vw"] = 0
+
+        logger.debug(
+            f"VirtualElevation: Data preparation complete, final count: {len(self.df)}"
+        )
 
     def virtual_slope(self, cda=None, crr=None):
         """
@@ -128,6 +146,10 @@ class VirtualElevation:
 
         # Filter out zero or very low velocities to avoid division by zero
         valid_idx = np.where(vg > 0.001)[0]
+        logger.debug(
+            f"VirtualElevation: virtual_slope filtering - Total points: {len(vg)}, Valid points: {len(valid_idx)}, Filtered out: {len(vg) - len(valid_idx)}"
+        )
+
         if len(valid_idx) > 0:
             # Only process entries with valid velocity
             valid_vg = vg[valid_idx]

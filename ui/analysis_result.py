@@ -1,14 +1,9 @@
 import csv
-
-# from folium.plugins import BeautifulifyIcon
-import io
 import os
 from datetime import datetime
 from pathlib import Path
 
-import folium
 import numpy as np
-
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import (
     QApplication,
@@ -28,9 +23,9 @@ from PySide6.QtWidgets import (
 )
 
 from models.virtual_elevation import VirtualElevation
-from ui.map_widget import (MapWidget, MapMode)
 from ui.async_worker import AsyncWorker
-from ui.ve_plot import VEPlotLabel, VEFigure, VEPlotSaver
+from ui.map_widget import MapMode, MapWidget
+from ui.ve_plot import VEFigure, VEPlotLabel, VEPlotSaver
 
 
 class VEWorker(AsyncWorker):
@@ -161,13 +156,20 @@ class VEWorker(AsyncWorker):
 
     def prepare_plots(self):
         # Use recorded distance from FIT file (convert to km) and reset to start from 0
-        if 'distance' in self.merged_data.columns and not self.merged_data['distance'].isna().all():
+        if (
+            "distance" in self.merged_data.columns
+            and not self.merged_data["distance"].isna().all()
+        ):
             # Use recorded distance from FIT file (in meters), reset to start from 0, convert to km
-            distance_raw = self.merged_data['distance'].values
-            self.distance = (distance_raw - distance_raw[0]) / 1000  # Reset to 0 and convert to km
-        elif hasattr(self.ve_calculator, 'df') and 'v' in self.ve_calculator.df.columns:
+            distance_raw = self.merged_data["distance"].values
+            self.distance = (
+                distance_raw - distance_raw[0]
+            ) / 1000  # Reset to 0 and convert to km
+        elif hasattr(self.ve_calculator, "df") and "v" in self.ve_calculator.df.columns:
             # Fallback: calculate cumulative distance from speed (v is in m/s, dt=1s)
-            distance_m = np.cumsum(self.ve_calculator.df['v'].values * self.ve_calculator.dt)
+            distance_m = np.cumsum(
+                self.ve_calculator.df["v"].values * self.ve_calculator.dt
+            )
             self.distance = distance_m / 1000  # Convert to km
         else:
             # Final fallback to time-based if no distance or speed data
@@ -211,16 +213,38 @@ class VEWorker(AsyncWorker):
 
         # Mark trimmed region with higher opacity - use lower opacity (0.1) for excluded regions
         if len(distance) > 0:
-            ax1.axvspan(0, distance[self.trim_start] if self.trim_start < len(distance) else 0, alpha=0.1, color="gray")
-            ax1.axvspan(distance[self.trim_end] if self.trim_end < len(distance) else distance[-1], distance[-1], alpha=0.1, color="gray")
+            ax1.axvspan(
+                0,
+                distance[self.trim_start] if self.trim_start < len(distance) else 0,
+                alpha=0.1,
+                color="gray",
+            )
+            ax1.axvspan(
+                (
+                    distance[self.trim_end]
+                    if self.trim_end < len(distance)
+                    else distance[-1]
+                ),
+                distance[-1],
+                alpha=0.1,
+                color="gray",
+            )
 
         # Add vertical lines at trim points WITHOUT adding to legend
         if self.trim_start < len(distance):
             ax1.axvline(
-                x=distance[self.trim_start], color="green", linestyle="--", label="_nolegend_"
+                x=distance[self.trim_start],
+                color="green",
+                linestyle="--",
+                label="_nolegend_",
             )
         if self.trim_end < len(distance):
-            ax1.axvline(x=distance[self.trim_end], color="red", linestyle="--", label="_nolegend_")
+            ax1.axvline(
+                x=distance[self.trim_end],
+                color="red",
+                linestyle="--",
+                label="_nolegend_",
+            )
 
         # Add grid lines
         ax1.grid(True, linestyle="--", alpha=0.3)
@@ -229,7 +253,9 @@ class VEWorker(AsyncWorker):
         if self.actual_elevation is not None:
             # Ensure same length
             min_len = min(
-                len(self.virtual_elevation_calibrated), len(self.actual_elevation), len(distance)
+                len(self.virtual_elevation_calibrated),
+                len(self.actual_elevation),
+                len(distance),
             )
             distance_trim = distance[:min_len]
             ve_trim = self.virtual_elevation_calibrated[:min_len]
@@ -280,12 +306,32 @@ class VEWorker(AsyncWorker):
 
             # Mark trimmed region in residuals - use lower opacity (0.1) for excluded regions
             if len(distance_trim) > 0:
-                ax2.axvspan(0, distance_trim[self.trim_start] if self.trim_start < len(distance_trim) else 0, alpha=0.1, color="gray")
-                ax2.axvspan(distance_trim[trim_end_safe] if trim_end_safe < len(distance_trim) else distance_trim[-1], distance_trim[-1], alpha=0.1, color="gray")
+                ax2.axvspan(
+                    0,
+                    (
+                        distance_trim[self.trim_start]
+                        if self.trim_start < len(distance_trim)
+                        else 0
+                    ),
+                    alpha=0.1,
+                    color="gray",
+                )
+                ax2.axvspan(
+                    (
+                        distance_trim[trim_end_safe]
+                        if trim_end_safe < len(distance_trim)
+                        else distance_trim[-1]
+                    ),
+                    distance_trim[-1],
+                    alpha=0.1,
+                    color="gray",
+                )
 
             # Add vertical lines at trim points
             if self.trim_start < len(distance_trim):
-                ax2.axvline(x=distance_trim[self.trim_start], color="green", linestyle="--")
+                ax2.axvline(
+                    x=distance_trim[self.trim_start], color="green", linestyle="--"
+                )
             if trim_end_safe < len(distance_trim):
                 ax2.axvline(x=distance_trim[trim_end_safe], color="red", linestyle="--")
 
@@ -364,8 +410,9 @@ class AnalysisResult(QMainWindow):
         self.ve_thread = QThread()
         self.ve_worker.moveToThread(self.ve_thread)
         self.ve_worker.resultReady.connect(self.on_ve_result_ready)
-        self.ve_plot_saver = VEPlotSaver(VEWorker(self.merged_data, self.params),
-                                         self.ve_thread)
+        self.ve_plot_saver = VEPlotSaver(
+            VEWorker(self.merged_data, self.params), self.ve_thread
+        )
         self.ve_thread.start()
         QApplication.instance().aboutToQuit.connect(self.join_threads)
 
@@ -420,7 +467,10 @@ class AnalysisResult(QMainWindow):
 
         # Check if we have enough data
         if len(self.merged_data) < 30:
-            raise ValueError("Not enough data points (less than 30 seconds)")
+            error_msg = f"Not enough data points for analysis: {len(self.merged_data)} data points found (minimum 30 required)"
+            if hasattr(self, "selected_laps") and self.selected_laps:
+                error_msg += f"\nSelected laps: {self.selected_laps}"
+            raise ValueError(error_msg)
 
         # Get lap info for display
         self.lap_info = []

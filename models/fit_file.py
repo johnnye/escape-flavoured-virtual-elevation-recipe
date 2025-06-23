@@ -1,22 +1,30 @@
+import logging
+import threading
+
 import numpy as np
 import pandas as pd
-import threading
-from fitparse import FitFile as FitParser
 import rasterio
+from fitparse import FitFile as FitParser
+from pyproj import Transformer
 from rasterio.windows import Window
 
-from pyproj import Transformer
+logger = logging.getLogger(__name__)
+
 
 class CancelledError(Exception):
     """Raised when an operation is cancelled by the user."""
+
     pass
+
 
 class AltitudeLookup:
     TILE_SIZE = 512
 
     def __init__(self, dem_path):
         self.dataset = rasterio.open(dem_path)
-        self.transformer = Transformer.from_crs("EPSG:4326", self.dataset.crs, always_xy=True)
+        self.transformer = Transformer.from_crs(
+            "EPSG:4326", self.dataset.crs, always_xy=True
+        )
 
     def batch_lookup(self, lats, lons):
         # Transform all coordinates
@@ -27,12 +35,14 @@ class AltitudeLookup:
         rows, cols = index_func(xs, ys)
 
         # Create dataframe for easier grouping
-        df = pd.DataFrame({
-            "lat": lats,
-            "lon": lons,
-            "row": rows,
-            "col": cols,
-        })
+        df = pd.DataFrame(
+            {
+                "lat": lats,
+                "lon": lons,
+                "row": rows,
+                "col": cols,
+            }
+        )
 
         # Assign tile group
         df["tile_row"] = df["row"] // self.TILE_SIZE
@@ -41,7 +51,12 @@ class AltitudeLookup:
         altitudes = np.full(len(df), np.nan)
 
         for (tile_r, tile_c), group in df.groupby(["tile_row", "tile_col"]):
-            window = Window(tile_c * self.TILE_SIZE, tile_r * self.TILE_SIZE, self.TILE_SIZE, self.TILE_SIZE)
+            window = Window(
+                tile_c * self.TILE_SIZE,
+                tile_r * self.TILE_SIZE,
+                self.TILE_SIZE,
+                self.TILE_SIZE,
+            )
             try:
                 tile = self.dataset.read(1, window=window)
             except Exception as e:
@@ -61,6 +76,7 @@ class AltitudeLookup:
 
     def close(self):
         self.dataset.close()
+
 
 class FitFile:
     def __init__(self, filename, dem_filename):
@@ -128,12 +144,12 @@ class FitFile:
                 and "timestamp" in lap_data
                 and "total_elapsed_time" in lap_data
             ):
-                # In FIT files, 'timestamp' is actually the end time of the lap
+                # In FIT files, 'timestamp' is usually the end time of the lap
                 lap_data["end_time"] = lap_data["timestamp"]
 
-                # Verify times make sense
-                if lap_data["end_time"] < lap_data["start_time"]:
-                    # Calculate a reasonable end time
+                # Verify times make sense - if timestamp equals start_time, calculate proper end_time
+                if lap_data["end_time"] <= lap_data["start_time"]:
+                    # Calculate end time from start time and duration
                     if (
                         "total_elapsed_time" in lap_data
                         and lap_data["total_elapsed_time"] > 0
@@ -195,9 +211,18 @@ class FitFile:
 
         # Convert to pandas dataframes
         self.records_df = pd.DataFrame(records)
+        initial_record_count = len(self.records_df)
+        logger.debug(f"Initial record count: {initial_record_count}")
+
         # drop any row from records_df that has a NaN value in timestamp, speed, or power columns
         self.records_df.dropna(subset=["timestamp", "speed", "power"], inplace=True)
+        after_dropna_count = len(self.records_df)
+        logger.debug(
+            f"After dropping NaN (timestamp/speed/power): {after_dropna_count} (removed {initial_record_count - after_dropna_count})"
+        )
+
         self.laps_df = pd.DataFrame(lap_records)
+        logger.debug(f"Total laps found: {len(self.laps_df)}")
 
         # Check if we have required data
         if len(self.records_df) == 0:
@@ -249,9 +274,11 @@ class FitFile:
 
         # Set timestamp as index
         self.records_df.set_index("timestamp", inplace=True)
+        logger.debug(f"Records before resampling: {len(self.records_df)}")
 
         # Resample to 1s intervals (use 's' instead of 'S' to avoid FutureWarning)
         self.resampled_df = self.records_df.resample("1s").interpolate(method="linear")
+        logger.debug(f"Records after resampling: {len(self.resampled_df)}")
 
         # Reset index to have timestamp as a column
         self.resampled_df.reset_index(inplace=True)
@@ -288,6 +315,9 @@ class FitFile:
                 (self.resampled_df["timestamp"] >= start_time)
                 & (self.resampled_df["timestamp"] <= end_time)
             ]
+            logger.debug(
+                f"Lap {i+1}: {len(lap_records)} records between {start_time} and {end_time}"
+            )
 
             # Calculate distance and duration
             duration_seconds = lap["total_elapsed_time"]
@@ -354,9 +384,14 @@ class FitFile:
                     lap = self.laps_df.iloc[lap_num - 1]
                     start_time = lap["start_time"]
 
+                    logger.debug(
+                        f"Lap {lap_num} raw data: start_time={lap.get('start_time')}, end_time={lap.get('end_time')}, timestamp={lap.get('timestamp')}, total_elapsed_time={lap.get('total_elapsed_time')}"
+                    )
+
                     # Use end_time instead of timestamp
                     if "end_time" in lap:
                         end_time = lap["end_time"]
+                        logger.debug(f"Lap {lap_num}: Using end_time = {end_time}")
                     else:
                         # Calculate end time from start time and duration
                         if (
@@ -366,18 +401,45 @@ class FitFile:
                             end_time = start_time + pd.Timedelta(
                                 seconds=lap["total_elapsed_time"]
                             )
+                            logger.debug(
+                                f"Lap {lap_num}: Calculated end_time from duration = {end_time}"
+                            )
                         else:
                             end_time = lap["timestamp"]  # Fallback to timestamp
+                            logger.debug(
+                                f"Lap {lap_num}: Using timestamp fallback = {end_time}"
+                            )
 
                     lap_records = self.resampled_df[
                         (self.resampled_df["timestamp"] >= start_time)
                         & (self.resampled_df["timestamp"] <= end_time)
                     ]
+                    logger.debug(
+                        f"Selected lap {lap_num}: {len(lap_records)} records between {start_time} and {end_time}"
+                    )
 
                     selected_records = pd.concat([selected_records, lap_records])
 
+            logger.debug(
+                f"Total selected records for analysis: {len(selected_records)}"
+            )
+
+            # Log data quality issues
+            if len(selected_records) > 0:
+                nan_speed_count = selected_records["speed"].isna().sum()
+                nan_power_count = selected_records["power"].isna().sum()
+                zero_speed_count = (selected_records["speed"] == 0).sum()
+                logger.debug(
+                    f"Data quality - NaN speed: {nan_speed_count}, NaN power: {nan_power_count}, Zero speed: {zero_speed_count}"
+                )
+
             # Ensure we have enough data points
             if len(selected_records) < 30:
+                logger.error(
+                    f"Not enough data points for analysis: {len(selected_records)} < 30"
+                )
+                logger.error(f"Selected lap numbers: {lap_numbers}")
+                logger.error(f"Resampled data total records: {len(self.resampled_df)}")
                 raise ValueError(
                     f"Not enough data points ({len(selected_records)} < 30)"
                 )
