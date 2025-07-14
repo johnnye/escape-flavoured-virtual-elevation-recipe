@@ -16,14 +16,14 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QSlider,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from ui.map_widget import (MapWidget, MapMode)
+from ui.locale_utils import parse_float
+from ui.map_widget import MapMode, MapWidget
 
 
 class AnalysisWindow(QMainWindow):
@@ -53,8 +53,9 @@ class AnalysisWindow(QMainWindow):
         left_layout = QVBoxLayout()
 
         # Add map widget if GPS data is available
-        self.map_widget = MapWidget(MapMode.LAPS, self.fit_file.resampled_df,
-                                    self.file_settings)
+        self.map_widget = MapWidget(
+            MapMode.LAPS, self.fit_file.resampled_df, self.file_settings
+        )
         if self.map_widget.has_gps():
             self.map_widget.update()
             left_layout.addWidget(self.map_widget, 2)
@@ -279,8 +280,9 @@ class AnalysisWindow(QMainWindow):
 
         # Update the map to show selected laps
         if self.fit_file.has_gps:
-            self.map_widget.set_selected_laps(self.fit_file.get_lap_data(),
-                                              self.selected_laps)
+            self.map_widget.set_selected_laps(
+                self.fit_file.get_lap_data(), self.selected_laps
+            )
             self.map_widget.update()
 
     def toggle_lap_selection(self):
@@ -328,23 +330,17 @@ class AnalysisWindow(QMainWindow):
 
         # Prepare the new settings to save
         new_settings = {
-            "system_mass": float(self.system_mass.text()),
-            "rho": float(self.rho.text()),
-            "cda": float(self.cda.text()) if self.cda.text() else None,
-            "crr": float(self.crr.text()) if self.crr.text() else None,
-            "cda_min": float(self.cda_min.text()),
-            "cda_max": float(self.cda_max.text()),
-            "crr_min": float(self.crr_min.text()),
-            "crr_max": float(self.crr_max.text()),
-            "eta": float(self.eta.text()),
-            "wind_speed": (
-                float(self.wind_speed.text()) if self.wind_speed.text() else None
-            ),
-            "wind_direction": (
-                float(self.wind_direction.text())
-                if self.wind_direction.text()
-                else None
-            ),
+            "system_mass": parse_float(self.system_mass.text()),
+            "rho": parse_float(self.rho.text()),
+            "cda": parse_float(self.cda.text()),
+            "crr": parse_float(self.crr.text()),
+            "cda_min": parse_float(self.cda_min.text()),
+            "cda_max": parse_float(self.cda_max.text()),
+            "crr_min": parse_float(self.crr_min.text()),
+            "crr_max": parse_float(self.crr_max.text()),
+            "eta": parse_float(self.eta.text()),
+            "wind_speed": parse_float(self.wind_speed.text()),
+            "wind_direction": parse_float(self.wind_direction.text()),
             "auto_lap_detection": self.auto_lap_detection.currentText(),
             # Preserve the existing trim settings
             "trim_settings": existing_trim_settings,
@@ -357,23 +353,17 @@ class AnalysisWindow(QMainWindow):
 
         # Collect parameters
         params = {
-            "system_mass": float(self.system_mass.text()),
-            "rho": float(self.rho.text()),
-            "cda": float(self.cda.text()) if self.cda.text() else None,
-            "crr": float(self.crr.text()) if self.crr.text() else None,
-            "cda_min": float(self.cda_min.text()),
-            "cda_max": float(self.cda_max.text()),
-            "crr_min": float(self.crr_min.text()),
-            "crr_max": float(self.crr_max.text()),
-            "eta": float(self.eta.text()),
-            "wind_speed": (
-                float(self.wind_speed.text()) if self.wind_speed.text() else None
-            ),
-            "wind_direction": (
-                float(self.wind_direction.text())
-                if self.wind_direction.text()
-                else None
-            ),
+            "system_mass": parse_float(self.system_mass.text()),
+            "rho": parse_float(self.rho.text()),
+            "cda": parse_float(self.cda.text()),
+            "crr": parse_float(self.crr.text()),
+            "cda_min": parse_float(self.cda_min.text()),
+            "cda_max": parse_float(self.cda_max.text()),
+            "crr_min": parse_float(self.crr_min.text()),
+            "crr_max": parse_float(self.crr_max.text()),
+            "eta": parse_float(self.eta.text()),
+            "wind_speed": parse_float(self.wind_speed.text()),
+            "wind_direction": parse_float(self.wind_direction.text()),
             "auto_lap_detection": auto_lap_detection,
         }
 
@@ -383,8 +373,8 @@ class AnalysisWindow(QMainWindow):
                 # Standard analysis without auto lap detection
                 from ui.analysis_result import AnalysisResult
 
-                self.analysis_result_window = AnalysisResult(self,
-                    self.fit_file, self.settings, self.selected_laps, params
+                self.analysis_result_window = AnalysisResult(
+                    self, self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.analysis_result_window.show()
                 self.hide()
@@ -392,8 +382,8 @@ class AnalysisWindow(QMainWindow):
                 # GPS based lap splitting
                 from ui.gps_lap_result import GPSLapResult
 
-                self.gps_lap_result_window = GPSLapResult(self,
-                    self.fit_file, self.settings, self.selected_laps, params
+                self.gps_lap_result_window = GPSLapResult(
+                    self, self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.gps_lap_result_window.show()
                 self.hide()
@@ -401,8 +391,8 @@ class AnalysisWindow(QMainWindow):
                 # GPS based out and back analysis
                 from ui.out_and_back_result import OutAndBackResult
 
-                self.out_and_back_result_window = OutAndBackResult(self,
-                    self.fit_file, self.settings, self.selected_laps, params
+                self.out_and_back_result_window = OutAndBackResult(
+                    self, self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.out_and_back_result_window.show()
                 self.hide()
@@ -410,8 +400,8 @@ class AnalysisWindow(QMainWindow):
                 # GPS gate one way analysis
                 from ui.gps_gate_result import GPSGateResult
 
-                self.gps_gate_result_window = GPSGateResult(self,
-                    self.fit_file, self.settings, self.selected_laps, params
+                self.gps_gate_result_window = GPSGateResult(
+                    self, self.fit_file, self.settings, self.selected_laps, params
                 )
                 self.gps_gate_result_window.show()
                 self.hide()
@@ -431,23 +421,17 @@ class AnalysisWindow(QMainWindow):
     def save_parameters(self):
         """Save the current parameters to settings"""
         settings = {
-            "system_mass": float(self.system_mass.text()),
-            "rho": float(self.rho.text()),
-            "cda": float(self.cda.text()) if self.cda.text() else None,
-            "crr": float(self.crr.text()) if self.crr.text() else None,
-            "cda_min": float(self.cda_min.text()),
-            "cda_max": float(self.cda_max.text()),
-            "crr_min": float(self.crr_min.text()),
-            "crr_max": float(self.crr_max.text()),
-            "eta": float(self.eta.text()),
-            "wind_speed": (
-                float(self.wind_speed.text()) if self.wind_speed.text() else None
-            ),
-            "wind_direction": (
-                float(self.wind_direction.text())
-                if self.wind_direction.text()
-                else None
-            ),
+            "system_mass": parse_float(self.system_mass.text()),
+            "rho": parse_float(self.rho.text()),
+            "cda": parse_float(self.cda.text()),
+            "crr": parse_float(self.crr.text()),
+            "cda_min": parse_float(self.cda_min.text()),
+            "cda_max": parse_float(self.cda_max.text()),
+            "crr_min": parse_float(self.crr_min.text()),
+            "crr_max": parse_float(self.crr_max.text()),
+            "eta": parse_float(self.eta.text()),
+            "wind_speed": parse_float(self.wind_speed.text()),
+            "wind_direction": parse_float(self.wind_direction.text()),
             "auto_lap_detection": self.auto_lap_detection.currentText(),
         }
 
@@ -464,21 +448,8 @@ class AnalysisWindow(QMainWindow):
     def update_wind_settings(self):
         """Update the wind settings and refresh the map"""
         # Parse wind speed and direction from UI
-        try:
-            wind_speed = (
-                float(self.wind_speed.text()) if self.wind_speed.text() else None
-            )
-        except ValueError:
-            wind_speed = None
-
-        try:
-            wind_direction = (
-                float(self.wind_direction.text())
-                if self.wind_direction.text()
-                else None
-            )
-        except ValueError:
-            wind_direction = None
+        wind_speed = parse_float(self.wind_speed.text())
+        wind_direction = parse_float(self.wind_direction.text())
 
         # Update the file settings
         self.file_settings["wind_speed"] = wind_speed
