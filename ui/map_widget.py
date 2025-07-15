@@ -731,7 +731,7 @@ class MapWorker(AsyncWorker):
         except Exception as e:
             print(f"Error fitting map bounds: {e}")
 
-        if self.wind_speed not in [None, 0] and self.wind_direction:
+        if self.wind_speed not in [None, 0] and self.wind_direction is not None:
             # Create a custom HTML element for the wind arrow
             wind_html = f"""
             <div id="wind-arrow" style="position: absolute; top: 10px; right: 10px; 
