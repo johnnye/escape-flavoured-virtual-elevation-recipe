@@ -52,6 +52,7 @@ class VEWorker(AsyncWorker):
     def __init__(self, merged_data, params):
         super(VEWorker, self).__init__()
         self.merged_data = merged_data
+        self.params = params
         # Create VE calculator
         self.ve_calculator = VirtualElevation(self.merged_data, params)
         self.ve_valid = False
@@ -85,6 +86,9 @@ class VEWorker(AsyncWorker):
             and not self.merged_data["altitude"].isna().all()
         ):
             self.actual_elevation = self.merged_data["altitude"].values
+
+        if self.params["velodrome"] is True and self.actual_elevation is not None:
+            self.actual_elevation[:] = 0
 
         # Calculate virtual elevation
         self.virtual_elevation = self.ve_calculator.calculate_ve(

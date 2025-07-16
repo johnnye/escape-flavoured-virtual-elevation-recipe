@@ -37,6 +37,7 @@ class VirtualElevation:
         self.cda_max = params.get("cda_max", 0.5)
         self.crr_min = params.get("crr_min", 0.001)
         self.crr_max = params.get("crr_max", 0.03)
+        self.velodrome = params.get("velodrome", False)
 
         # Ensure wind_speed is never None
         self.wind_speed = params.get("wind_speed", 0)
@@ -75,6 +76,12 @@ class VirtualElevation:
         # Handle altitude/elevation data
         if "altitude" in self.df.columns:
             self.df["elevation"] = self.df["altitude"]
+
+        if self.velodrome is True:
+            self.df.loc[:, "elevation"] = 0
+            if "altitude" in self.df.columns:
+                self.df.loc[:, "altitude"] = 0
+
 
         # Log data quality before processing
         zero_speed_count = (self.df["v"] == 0).sum()
