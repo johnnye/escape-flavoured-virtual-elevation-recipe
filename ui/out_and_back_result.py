@@ -466,11 +466,14 @@ class VEWorker(AsyncWorker):
                     section_data["outbound_distance"] = distances
 
                     # Store actual elevation if available
-                    if has_elevation:
+                    if has_elevation and self.params["velodrome"] is False:
                         actual_elevation = outbound_data["altitude"].values
                         self.all_actual_elevations.append(
                             (distances, actual_elevation, "outbound")
                         )
+                    elif self.params["velodrome"] is True:
+                        actual_elevation = np.zeros_like(outbound_data["altitude"])
+                        self.all_actual_elevations.append((distances, actual_elevation, "outbound"))
 
             # Process inbound segment (B to A)
             if "inbound_start_idx" in section and "inbound_end_idx" in section:
@@ -515,17 +518,20 @@ class VEWorker(AsyncWorker):
                     section_data["inbound_distance"] = distances
 
                     # Store actual elevation if available
-                    if has_elevation:
+                    if has_elevation and self.params["velodrome"] is False:
                         actual_elevation = inbound_data["altitude"].values
                         self.all_actual_elevations.append(
                             (distances, actual_elevation, "inbound")
                         )
+                    elif self.params["velodrome"] is True:
+                        actual_elevation = np.zeros_like(inbound_data["altitude"])
+                        self.all_actual_elevations.append((distances, actual_elevation, "inbound"))
 
             # Add section data
             self.section_ve_profiles.append(section_data)
 
         # Calculate single mean elevation profile if we have actual elevation data
-        if has_elevation and self.all_actual_elevations:
+        if has_elevation and self.all_actual_elevations and self.params["velodrome"] is False:
             # Find max distance to create reference distance array
             max_distance = 0
             for distances, _, direction in self.all_actual_elevations:
@@ -572,6 +578,20 @@ class VEWorker(AsyncWorker):
 
             # Store mean elevation profile
             self.mean_actual_elevation = mean_elevation
+            self.mean_actual_distance_km = reference_distance_km
+        elif self.params["velodrome"] is True:
+            max_distance = 0
+            for distances, _, direction in self.all_actual_elevations:
+                if len(distances) > 0:
+                    max_distance = max(max_distance, distances[-1])
+
+            # Create reference distance array (1m intervals)
+            reference_distance = np.linspace(
+                0, max_distance * 1000, int(max_distance * 1000) + 1
+            )
+            reference_distance_km = reference_distance / 1000
+
+            self.mean_actual_elevation = np.zeros_like(reference_distance_km)
             self.mean_actual_distance_km = reference_distance_km
 
     def update_plots(self):
