@@ -146,7 +146,7 @@ class AnalysisWindow(QMainWindow):
 
         # Velodrome - we'll use this to zero altitude.
         velodrome_layout = QHBoxLayout()
-        self.velodrome = QCheckBox("Sets Altitude to Zero - for use in a velodrome")
+        self.velodrome = QCheckBox("Sets Altitude to Zero")
 
         # Set its checked state based on the bool in file_settings
         if "velodrome" in self.file_settings and self.file_settings["velodrome"] is not None:
