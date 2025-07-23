@@ -303,6 +303,7 @@ class VEWorker(AsyncWorker):
         self.lap_actual_elevation = []
         self.mean_actual_elevation = None
 
+
         if not self.detected_laps:
             return
 
@@ -387,15 +388,19 @@ class VEWorker(AsyncWorker):
             self.lap_distances.append(distances)
 
             # If we have elevation data, extract the actual elevation profile
-            if has_elevation:
+            if has_elevation and self.params["velodrome"] is False:
                 # Extract actual elevation profile for this lap
                 actual_elevation = lap_data["altitude"].values
 
                 # Store the actual elevation profile with its distances
                 self.lap_actual_elevation.append((distances, actual_elevation))
+            elif self.params["velodrome"] is True:
+                actual_elevation = lap_data["altitude"].values
+                actual_elevation[:] = 0
+                self.lap_actual_elevation.append((distances, actual_elevation))
 
         # Calculate mean actual elevation profile if we have elevation data
-        if has_elevation and self.lap_actual_elevation:
+        if has_elevation and self.lap_actual_elevation and self.params["velodrome"] is False:
             # Initialize array to accumulate elevation values
             elevation_sum = np.zeros_like(reference_distance)
             elevation_count = np.zeros_like(reference_distance)
@@ -425,6 +430,9 @@ class VEWorker(AsyncWorker):
 
             # Store the mean actual elevation profile
             self.mean_actual_elevation = mean_elevation
+            self.mean_actual_distance_km = reference_distance_km
+        elif self.params["velodrome"] is True:
+            self.mean_actual_elevation = np.zeros_like(reference_distance_km)
             self.mean_actual_distance_km = reference_distance_km
 
     def update_plots(self):
@@ -509,6 +517,8 @@ class VEWorker(AsyncWorker):
 
                         # Calibrate VE to match this starting point
                         calibrated_ve = ve - ve[0] + start_elevation
+                    elif self.params["velodrome"] is True:
+                        calibrated_ve = 0
                     else:
                         # No calibration needed
                         calibrated_ve = ve
