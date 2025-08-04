@@ -1,14 +1,23 @@
 import io
+import tempfile
+import webbrowser
+from pathlib import Path
 
 import folium
-from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QVBoxLayout, QWidget, QLabel, QPushButton
 from PySide6.QtCore import (
     Qt,
     QThread,
 )
 from enum import Enum, auto
 from ui.async_worker import AsyncWorker
+
+# Try to import WebEngine, fall back to browser if not available
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+    WEBENGINE_AVAILABLE = True
+except ImportError:
+    WEBENGINE_AVAILABLE = False
 
 class MapMode(Enum):
     LAPS = auto()
@@ -779,8 +788,25 @@ class MapWidget(QWidget):
         self.map_worker = MapWorker(mode, records, params)
         self.values = {}
         self.layout = QVBoxLayout(self)
-        self.webview = QWebEngineView()
-        self.layout.addWidget(self.webview)
+        self.temp_file = None
+        
+        if WEBENGINE_AVAILABLE:
+            # Use embedded WebEngine view
+            self.webview = QWebEngineView()
+            self.layout.addWidget(self.webview)
+            self.use_browser_fallback = False
+        else:
+            # Use browser fallback
+            self.use_browser_fallback = True
+            self.fallback_label = QLabel("Map will open in your default web browser")
+            self.fallback_label.setAlignment(Qt.AlignCenter)
+            self.layout.addWidget(self.fallback_label)
+            
+            self.open_button = QPushButton("Open Map in Browser")
+            self.open_button.clicked.connect(self.open_in_browser)
+            self.layout.addWidget(self.open_button)
+            self.open_button.setEnabled(False)  # Disabled until map is ready
+        
         self.layout.setContentsMargins(0, 0, 0, 0)
 
         self.map_thread = QThread()
@@ -825,10 +851,33 @@ class MapWidget(QWidget):
         self.map_worker.set_values(self.values)
 
     def on_map_ready(self, res):
-        # Load the HTML into the QWebEngineView
-        self.webview.setHtml(res)
+        if self.use_browser_fallback:
+            # Save HTML to temp file for browser opening
+            if self.temp_file:
+                self.temp_file.close()
+            
+            self.temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False)
+            self.temp_file.write(res)
+            self.temp_file.close()
+            
+            self.open_button.setEnabled(True)
+            self.fallback_label.setText("Map ready - click button to open in browser")
+        else:
+            # Load the HTML into the QWebEngineView
+            self.webview.setHtml(res)
+
+    def open_in_browser(self):
+        if self.temp_file:
+            webbrowser.open(f'file://{self.temp_file.name}')
 
     def close(self):
         self.map_thread.quit()
         self.map_thread.wait()
+        
+        # Clean up temp file
+        if self.temp_file:
+            try:
+                Path(self.temp_file.name).unlink(missing_ok=True)
+            except OSError:
+                pass
 

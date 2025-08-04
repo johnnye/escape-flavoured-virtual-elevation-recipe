@@ -71,10 +71,13 @@ jobs:
                       --hidden-import=rasterio.plot \
                       --hidden-import=rasterio.rio \
                       --hidden-import=rasterio.shutil \
+                      --hidden-import=PySide6.QtWebEngineWidgets \
+                      --hidden-import=PySide6.QtWebEngineCore \
                       --collect-data=rasterio \
                       --collect-data=pyproj \
                       --collect-data=scipy \
                       --collect-binaries=PySide6 \
+                      --collect-data=PySide6 \
                       main.py
 
       - name: Smoke-test GUI binary (no CLI flags)
