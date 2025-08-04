@@ -124,21 +124,41 @@ jobs:
           mkdir -p release_files
           
           # Debug: List downloaded artifacts
-          find dist -type f -o -name "*.app" | sort
+          echo "=== All downloaded artifacts ==="
+          find dist -type f -o -type d | sort
+          echo "=== App bundles ==="
+          find dist -name "*.app" -type d | sort
           
           # Process macOS artifacts
+          echo "=== Processing macOS artifacts ==="
           find dist -path "*macOS*" | while read item; do
+            echo "Processing item: $item"
             if [[ -d "$item" && "$item" == *".app" ]]; then
-              # It's an app bundle directory
-              (cd $(dirname "$item") && zip -r "../../release_files/VirtualElevationRecipes-macOS.zip" $(basename "$item"))
+              echo "Found .app bundle: $item"
+              # It's an app bundle directory - zip it
+              (cd $(dirname "$item") && zip -r "$(pwd)/release_files/VirtualElevationRecipes-macOS.zip" $(basename "$item"))
             elif [[ -f "$item" && "$item" != *".icns" && "$item" != *".ico" ]]; then
+              echo "Found file: $item"
               # It's a binary file, not an icon
               if [[ "$item" == *".app.zip" || "$item" == *".zip" ]]; then
                 # Already zipped app bundle
                 cp "$item" "release_files/VirtualElevationRecipes-macOS.zip"
+              else
+                # Single binary file (shouldn't happen with onedir but handle it)
+                cp "$item" "release_files/VirtualElevationRecipes-macOS"
               fi
             fi
           done
+          
+          # Fallback: if no macOS zip was created, look for .app directly
+          if [[ ! -f "release_files/VirtualElevationRecipes-macOS.zip" ]]; then
+            echo "=== Fallback: Looking for .app bundles directly ==="
+            find dist -name "VirtualElevationRecipes.app" -type d | while read app_path; do
+              echo "Found app bundle at: $app_path"
+              (cd $(dirname "$app_path") && zip -r "$(pwd)/release_files/VirtualElevationRecipes-macOS.zip" $(basename "$app_path"))
+              break
+            done
+          fi
           
           # Process Windows artifacts
           find dist -path "*Windows*" -name "*.exe" | while read item; do
