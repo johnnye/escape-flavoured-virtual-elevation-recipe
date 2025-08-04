@@ -355,7 +355,7 @@ class AnalysisWindow(QMainWindow):
             "wind_speed": parse_float(self.wind_speed.text()),
             "wind_direction": parse_float(self.wind_direction.text()),
             "auto_lap_detection": self.auto_lap_detection.currentText(),
-            "velodrome": self.velodrome,
+            "velodrome": self.velodrome.isChecked(),
             # Preserve the existing trim settings
             "trim_settings": existing_trim_settings,
         }

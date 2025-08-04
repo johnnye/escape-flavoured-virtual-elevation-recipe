@@ -37,7 +37,7 @@ class VirtualElevation:
         self.cda_max = params.get("cda_max", 0.5)
         self.crr_min = params.get("crr_min", 0.001)
         self.crr_max = params.get("crr_max", 0.03)
-        self.velodrome = params.get("velodrome", False)
+        self.velodrome = bool(params.get("velodrome", False))
 
         # Ensure wind_speed is never None
         self.wind_speed = params.get("wind_speed", 0)
@@ -77,7 +77,7 @@ class VirtualElevation:
         if "altitude" in self.df.columns:
             self.df["elevation"] = self.df["altitude"]
 
-        if self.velodrome is True:
+        if self.velodrome:
             self.df.loc[:, "elevation"] = 0
             if "altitude" in self.df.columns:
                 self.df.loc[:, "altitude"] = 0
@@ -350,8 +350,12 @@ class VirtualElevation:
                 elev_trim_region = elev_norm[trim_indices]
 
                 # R² calculation
-                corr = np.corrcoef(ve_trim_region, elev_trim_region)[0, 1]
-                r2 = corr**2
+                # Handle case where elevation is constant (velodrome mode)
+                if np.std(elev_trim_region) == 0 or np.std(ve_trim_region) == 0:
+                    r2 = 0.0  # No correlation possible with constant data
+                else:
+                    corr = np.corrcoef(ve_trim_region, elev_trim_region)[0, 1]
+                    r2 = corr**2
 
                 # RMSE calculation
                 rmse = np.sqrt(np.mean((ve_trim_region - elev_trim_region) ** 2))

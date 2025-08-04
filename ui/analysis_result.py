@@ -87,8 +87,8 @@ class VEWorker(AsyncWorker):
         ):
             self.actual_elevation = self.merged_data["altitude"].values
 
-        if self.params["velodrome"] is True and self.actual_elevation is not None:
-            self.actual_elevation[:] = 0
+        if self.params["velodrome"] and self.actual_elevation is not None:
+            self.actual_elevation = np.zeros_like(self.actual_elevation)
 
         # Calculate virtual elevation
         self.virtual_elevation = self.ve_calculator.calculate_ve(
@@ -123,8 +123,12 @@ class VEWorker(AsyncWorker):
                 elev_trim_region = elev_trim[trim_indices]
 
                 # R² calculation
-                corr = np.corrcoef(ve_trim_region, elev_trim_region)[0, 1]
-                self.r2 = corr**2
+                # Handle case where elevation is constant (velodrome mode)
+                if np.std(elev_trim_region) == 0 or np.std(ve_trim_region) == 0:
+                    self.r2 = 0.0  # No correlation possible with constant data
+                else:
+                    corr = np.corrcoef(ve_trim_region, elev_trim_region)[0, 1]
+                    self.r2 = corr**2
 
                 # RMSE calculation
                 self.rmse = np.sqrt(np.mean((ve_trim_region - elev_trim_region) ** 2))

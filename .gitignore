@@ -173,3 +173,5 @@ cython_debug/
 .assets/make-icons.sh
 CLAUDE.md
 .claude/settings.local.json
+.python-version
+uv.lock

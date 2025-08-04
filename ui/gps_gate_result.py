@@ -407,7 +407,7 @@ class VEWorker(AsyncWorker):
             self.section_distances.append(distances)
 
             # If we have elevation data, collect it for mean calculation
-            if has_elevation and self.params["velodrome"] is False:
+            if has_elevation and not self.params["velodrome"]:
                 # Extract actual elevation for this section
                 actual_elevation = section_data["altitude"].values
 
@@ -418,7 +418,7 @@ class VEWorker(AsyncWorker):
                 self.all_actual_elevations[gate_set_idx].append(
                     (distances, actual_elevation)
                 )
-            elif self.params["velodrome"] is True:
+            elif self.params["velodrome"]:
                 actual_elevation = np.zeros_like(section_data["altitude"])
                 if gate_set_idx not in self.all_actual_elevations:
                     self.all_actual_elevations[gate_set_idx] = []
