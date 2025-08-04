@@ -76,8 +76,6 @@ jobs:
                       --collect-data=rasterio \
                       --collect-data=pyproj \
                       --collect-data=scipy \
-                      --collect-binaries=PySide6 \
-                      --collect-data=PySide6 \
                       main.py
 
       - name: Smoke-test GUI binary (no CLI flags)
