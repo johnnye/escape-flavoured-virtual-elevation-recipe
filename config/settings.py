@@ -93,6 +93,7 @@ class Settings:
             "wind_speed": None,
             "wind_direction": None,
             "auto_lap_detection": "None",
+            "velodrome": False,
         }
 
         if file_settings_path.exists():

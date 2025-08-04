@@ -144,6 +144,19 @@ class AnalysisWindow(QMainWindow):
         self.eta.setValidator(QDoubleValidator(0, 1, 4))
         param_layout.addRow("Eta (efficiency):", self.eta)
 
+        # Velodrome - we'll use this to zero altitude.
+        velodrome_layout = QHBoxLayout()
+        self.velodrome = QCheckBox("Sets Altitude to Zero")
+
+        # Set its checked state based on the bool in file_settings
+        if "velodrome" in self.file_settings and self.file_settings["velodrome"] is not None:
+            self.velodrome.setChecked(bool(self.file_settings["velodrome"]))
+        else:
+            self.velodrome.setChecked(False)
+
+        velodrome_layout.addWidget(self.velodrome)
+        param_layout.addRow("Velodrome:", velodrome_layout)
+
         self.wind_speed = QLineEdit()
         if self.file_settings["wind_speed"] is not None:
             self.wind_speed.setText(str(self.file_settings["wind_speed"]))
@@ -342,6 +355,7 @@ class AnalysisWindow(QMainWindow):
             "wind_speed": parse_float(self.wind_speed.text()),
             "wind_direction": parse_float(self.wind_direction.text()),
             "auto_lap_detection": self.auto_lap_detection.currentText(),
+            "velodrome": self.velodrome.isChecked(),
             # Preserve the existing trim settings
             "trim_settings": existing_trim_settings,
         }
@@ -365,6 +379,7 @@ class AnalysisWindow(QMainWindow):
             "wind_speed": parse_float(self.wind_speed.text()),
             "wind_direction": parse_float(self.wind_direction.text()),
             "auto_lap_detection": auto_lap_detection,
+            "velodrome": self.velodrome.isChecked(),
         }
 
         # Launch appropriate analysis window based on auto lap detection
@@ -433,6 +448,7 @@ class AnalysisWindow(QMainWindow):
             "wind_speed": parse_float(self.wind_speed.text()),
             "wind_direction": parse_float(self.wind_direction.text()),
             "auto_lap_detection": self.auto_lap_detection.currentText(),
+            "velodrome": self.velodrome.isChecked(),
         }
 
         self.settings.save_file_settings(self.fit_file.filename, settings)
