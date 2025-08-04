@@ -1,0 +1,17 @@
+[project]
+name = "escape-flavoured-virtual-elevation-recipe"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13.5"
+dependencies = [
+    "fitparse>=1.2.0",
+    "folium>=0.20.0",
+    "matplotlib>=3.10.5",
+    "numpy>=2.3.2",
+    "pandas>=2.3.1",
+    "platformdirs>=4.3.8",
+    "pyproj>=3.7.1",
+    "pyside6>=6.9.1",
+    "rasterio>=1.4.3",
+]
