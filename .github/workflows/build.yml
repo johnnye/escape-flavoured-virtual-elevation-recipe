@@ -47,6 +47,24 @@ jobs:
                       --noupx \
                       ${ICON:+--icon="$ICON"} \
                       --name "VirtualElevationRecipes" \
+                      --hidden-import=rasterio.sample \
+                      --hidden-import=rasterio._io \
+                      --hidden-import=rasterio.control \
+                      --hidden-import=rasterio.crs \
+                      --hidden-import=rasterio.vrt \
+                      --hidden-import=rasterio.warp \
+                      --hidden-import=rasterio.windows \
+                      --hidden-import=rasterio.features \
+                      --hidden-import=rasterio.transform \
+                      --hidden-import=rasterio.coords \
+                      --hidden-import=rasterio.profiles \
+                      --hidden-import=rasterio.mask \
+                      --hidden-import=rasterio.merge \
+                      --hidden-import=rasterio.plot \
+                      --hidden-import=rasterio.rio \
+                      --hidden-import=rasterio.shutil \
+                      --collect-data=rasterio \
+                      --collect-data=pyproj \
                       main.py
 
       - name: Smoke-test GUI binary (no CLI flags)
