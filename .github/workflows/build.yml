@@ -42,7 +42,15 @@ jobs:
             Linux)   ICON="" ;;   # Linux ignores --icon; desktop files set it later
           esac
 
-          pyinstaller --onefile --windowed --clean \
+          # Use onedir for macOS to avoid deprecation warning with .app bundles
+          # Use onefile for Windows/Linux for single executable distribution
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            BUNDLE_MODE="--onedir"
+          else
+            BUNDLE_MODE="--onefile"
+          fi
+
+          pyinstaller $BUNDLE_MODE --windowed --clean \
                       ${{ runner.os != 'Windows' && '--strip' || '' }} \
                       --noupx \
                       ${ICON:+--icon="$ICON"} \
@@ -63,6 +71,7 @@ jobs:
                       --hidden-import=rasterio.plot \
                       --hidden-import=rasterio.rio \
                       --hidden-import=rasterio.shutil \
+                      --hidden-import=scipy.special._cdflib \
                       --collect-data=rasterio \
                       --collect-data=pyproj \
                       main.py
