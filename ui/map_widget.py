@@ -12,12 +12,41 @@ from PySide6.QtCore import (
 from enum import Enum, auto
 from ui.async_worker import AsyncWorker
 
-# Try to import WebEngine, fall back to browser if not available
-try:
+# Try to import WebEngine and check if process files exist in PyInstaller bundle
+def _check_webengine_availability():
+    """Check if WebEngine is importable and has required process files"""
+    try:
+        import importlib.util
+        import sys
+        import os
+        
+        # Check if the module can be imported
+        if importlib.util.find_spec("PySide6.QtWebEngineWidgets") is None:
+            return False
+            
+        # Check if we're in a PyInstaller bundle
+        if getattr(sys, 'frozen', False):
+            # In PyInstaller bundle - check for WebEngine process
+            bundle_dir = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
+            webengine_paths = [
+                os.path.join(bundle_dir, 'QtWebEngineProcess'),
+                os.path.join(bundle_dir, 'QtWebEngineProcess.app', 'Contents', 'MacOS', 'QtWebEngineProcess'),
+                os.path.join(os.path.dirname(bundle_dir), 'Helpers', 'QtWebEngineProcess.app', 'Contents', 'MacOS', 'QtWebEngineProcess')
+            ]
+            
+            # If none of the expected paths exist, fall back to browser
+            if not any(os.path.exists(path) for path in webengine_paths):
+                return False
+        
+        return True
+    except ImportError:
+        return False
+
+WEBENGINE_AVAILABLE = _check_webengine_availability()
+
+# Import the module if it's available (for the class definition)
+if WEBENGINE_AVAILABLE:
     from PySide6.QtWebEngineWidgets import QWebEngineView
-    WEBENGINE_AVAILABLE = True
-except ImportError:
-    WEBENGINE_AVAILABLE = False
 
 class MapMode(Enum):
     LAPS = auto()
