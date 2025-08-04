@@ -71,9 +71,9 @@ jobs:
                       --hidden-import=rasterio.plot \
                       --hidden-import=rasterio.rio \
                       --hidden-import=rasterio.shutil \
-                      --hidden-import=scipy.special._cdflib \
                       --collect-data=rasterio \
                       --collect-data=pyproj \
+                      --collect-data=scipy \
                       main.py
 
       - name: Smoke-test GUI binary (no CLI flags)
