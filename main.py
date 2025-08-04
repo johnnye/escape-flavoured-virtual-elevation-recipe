@@ -5,6 +5,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from ui.file_selector import FileSelector
+from utils.file_handling import get_config_dir
 
 
 def main():
@@ -15,10 +16,13 @@ def main():
         else logging.INFO
     )
 
+    # Use config directory for log file to avoid read-only filesystem issues
+    log_file = get_config_dir() / "virtual_elevation.log"
+
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[logging.FileHandler("virtual_elevation.log")]
+        handlers=[logging.FileHandler(log_file)]
         + ([logging.StreamHandler(sys.stdout)] if log_level == logging.DEBUG else []),
     )
 
