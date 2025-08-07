@@ -2,7 +2,6 @@ import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.stats import chi2
 
 logger = logging.getLogger(__name__)
 
@@ -321,19 +320,10 @@ class VirtualElevation:
         ax1.set_title("Virtual Elevation Profile")
         ax1.legend()
 
-        # Add text with CdA and Crr values
-        cda_str = f"CdA: {cda:.4f}"
-        crr_str = f"Crr: {crr:.5f}"
-        ax1.text(
-            0.02,
-            0.95,
-            cda_str + "\n" + crr_str,
-            transform=ax1.transAxes,
-            verticalalignment="top",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
-        )
+        cda_ci = None
+        crr_ci = None
 
-        # Add R² and RMSE if actual elevation is provided
+        # Add R², RMSE and parameter confidence intervals if actual elevation is provided
         if actual_elevation is not None:
             # Calculate in trimmed region only
             trim_indices = np.where(
@@ -349,21 +339,46 @@ class VirtualElevation:
 
                 # RMSE calculation
                 residuals = ve_trim_region - elev_trim_region
-                mse = np.mean(residuals ** 2)
+                mse = np.mean(residuals**2)
                 rmse = np.sqrt(mse)
 
-                # 95% confidence interval for RMSE
-                n = len(residuals)
-                alpha = 0.05
-                chi2_lower = chi2.ppf(alpha / 2, n)
-                chi2_upper = chi2.ppf(1 - alpha / 2, n)
-                rmse_ci_lower = np.sqrt(n * mse / chi2_upper)
-                rmse_ci_upper = np.sqrt(n * mse / chi2_lower)
+                # Parameter confidence intervals using Jacobian
+                delta_cda = 1e-4
+                delta_crr = 1e-5
+
+                ve_plus = self.calculate_ve(cda + delta_cda, crr)[:min_len]
+                ve_minus = self.calculate_ve(cda - delta_cda, crr)[:min_len]
+                ve_plus_norm = ve_plus - ve_plus[0]
+                ve_minus_norm = ve_minus - ve_minus[0]
+                d_cda = (ve_plus_norm[trim_indices] - ve_minus_norm[trim_indices]) / (
+                    2 * delta_cda
+                )
+
+                ve_plus = self.calculate_ve(cda, crr + delta_crr)[:min_len]
+                ve_minus = self.calculate_ve(cda, crr - delta_crr)[:min_len]
+                ve_plus_norm = ve_plus - ve_plus[0]
+                ve_minus_norm = ve_minus - ve_minus[0]
+                d_crr = (ve_plus_norm[trim_indices] - ve_minus_norm[trim_indices]) / (
+                    2 * delta_crr
+                )
+
+                J = np.column_stack((d_cda, d_crr))
+                try:
+                    cov = (rmse**2) * np.linalg.inv(J.T @ J)
+                    se = np.sqrt(np.diag(cov))
+                    cda_ci = (
+                        cda - 1.96 * se[0],
+                        cda + 1.96 * se[0],
+                    )
+                    crr_ci = (
+                        crr - 1.96 * se[1],
+                        crr + 1.96 * se[1],
+                    )
+                except np.linalg.LinAlgError:
+                    pass
 
                 r2_str = f"R²: {r2:.3f}"
-                rmse_str = (
-                    f"RMSE: {rmse:.3f} m (95% CI: {rmse_ci_lower:.3f}-{rmse_ci_upper:.3f} m)"
-                )
+                rmse_str = f"RMSE: {rmse:.3f} m"
                 ax1.text(
                     0.78,
                     0.95,
@@ -372,6 +387,22 @@ class VirtualElevation:
                     verticalalignment="top",
                     bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
                 )
+
+        # Add text with CdA and Crr values (and confidence intervals if available)
+        cda_str = f"CdA: {cda:.4f}"
+        if cda_ci is not None:
+            cda_str += f" (95% CI: {cda_ci[0]:.4f}-{cda_ci[1]:.4f})"
+        crr_str = f"Crr: {crr:.5f}"
+        if crr_ci is not None:
+            crr_str += f" (95% CI: {crr_ci[0]:.5f}-{crr_ci[1]:.5f})"
+        ax1.text(
+            0.02,
+            0.95,
+            cda_str + "\n" + crr_str,
+            transform=ax1.transAxes,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
 
         plt.tight_layout()
 
