@@ -2,6 +2,7 @@ import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.stats import chi2
 
 logger = logging.getLogger(__name__)
 
@@ -358,10 +359,22 @@ class VirtualElevation:
                     r2 = corr**2
 
                 # RMSE calculation
-                rmse = np.sqrt(np.mean((ve_trim_region - elev_trim_region) ** 2))
+                residuals = ve_trim_region - elev_trim_region
+                mse = np.mean(residuals ** 2)
+                rmse = np.sqrt(mse)
+
+                # 95% confidence interval for RMSE
+                n = len(residuals)
+                alpha = 0.05
+                chi2_lower = chi2.ppf(alpha / 2, n)
+                chi2_upper = chi2.ppf(1 - alpha / 2, n)
+                rmse_ci_lower = np.sqrt(n * mse / chi2_upper)
+                rmse_ci_upper = np.sqrt(n * mse / chi2_lower)
 
                 r2_str = f"R²: {r2:.3f}"
-                rmse_str = f"RMSE: {rmse:.3f} m"
+                rmse_str = (
+                    f"RMSE: {rmse:.3f} m (95% CI: {rmse_ci_lower:.3f}-{rmse_ci_upper:.3f} m)"
+                )
                 ax1.text(
                     0.78,
                     0.95,

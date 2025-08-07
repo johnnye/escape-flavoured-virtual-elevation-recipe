@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+from scipy.stats import chi2
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import (
     QApplication,
@@ -43,6 +44,7 @@ class VEWorker(AsyncWorker):
         "distance",
         "r2",
         "rmse",
+        "rmse_ci",
         "ve_elevation_diff",
         "virtual_elevation_calibrated",
         "virtual_elevation",
@@ -131,7 +133,18 @@ class VEWorker(AsyncWorker):
                     self.r2 = corr**2
 
                 # RMSE calculation
-                self.rmse = np.sqrt(np.mean((ve_trim_region - elev_trim_region) ** 2))
+                residuals = ve_trim_region - elev_trim_region
+                mse = np.mean(residuals ** 2)
+                self.rmse = np.sqrt(mse)
+
+                # 95% confidence interval for RMSE
+                n = len(residuals)
+                alpha = 0.05
+                chi2_lower = chi2.ppf(alpha / 2, n)
+                chi2_upper = chi2.ppf(1 - alpha / 2, n)
+                rmse_ci_lower = np.sqrt(n * mse / chi2_upper)
+                rmse_ci_upper = np.sqrt(n * mse / chi2_lower)
+                self.rmse_ci = (rmse_ci_lower, rmse_ci_upper)
 
                 # Calculate elevation gain (difference between end and start)
                 # Make sure we don't exceed array bounds
@@ -148,11 +161,13 @@ class VEWorker(AsyncWorker):
             else:
                 self.r2 = 0
                 self.rmse = 0
+                self.rmse_ci = (0, 0)
                 self.ve_elevation_diff = 0
                 self.actual_elevation_diff = 0
         else:
             # If no actual elevation data, still create a calibrated version
             self.virtual_elevation_calibrated = self.virtual_elevation.copy()
+            self.rmse_ci = (0, 0)
             self.ve_elevation_diff = (
                 self.virtual_elevation_calibrated[
                     min(self.trim_end, len(self.virtual_elevation_calibrated) - 1)
@@ -372,7 +387,12 @@ class VEWorker(AsyncWorker):
         # Add R², RMSE and elevation gain if calculated
         if hasattr(self, "r2") and hasattr(self, "rmse"):
             r2_str = f"R²: {self.r2:.3f}"
-            rmse_str = f"RMSE: {self.rmse:.3f} m"
+            if hasattr(self, "rmse_ci"):
+                rmse_str = (
+                    f"RMSE: {self.rmse:.3f} m (95% CI: {self.rmse_ci[0]:.3f}-{self.rmse_ci[1]:.3f} m)"
+                )
+            else:
+                rmse_str = f"RMSE: {self.rmse:.3f} m"
 
             # Add elevation gain differences
             if hasattr(self, "ve_elevation_diff") and hasattr(
@@ -780,6 +800,9 @@ class AnalysisResult(QMainWindow):
 
         if hasattr(self, "rmse"):
             result_row["rmse"] = self.rmse
+        if hasattr(self, "rmse_ci"):
+            result_row["rmse_ci_lower"] = self.rmse_ci[0]
+            result_row["rmse_ci_upper"] = self.rmse_ci[1]
 
         # Save to CSV
         header = list(result_row.keys())
