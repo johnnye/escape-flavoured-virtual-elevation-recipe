@@ -4,7 +4,6 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-from scipy.stats import chi2
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import (
     QApplication,
@@ -44,7 +43,8 @@ class VEWorker(AsyncWorker):
         "distance",
         "r2",
         "rmse",
-        "rmse_ci",
+        "cda_ci",
+        "crr_ci",
         "ve_elevation_diff",
         "virtual_elevation_calibrated",
         "virtual_elevation",
@@ -126,17 +126,58 @@ class VEWorker(AsyncWorker):
 
                 # RMSE calculation
                 residuals = ve_trim_region - elev_trim_region
-                mse = np.mean(residuals ** 2)
+                mse = np.mean(residuals**2)
                 self.rmse = np.sqrt(mse)
 
-                # 95% confidence interval for RMSE
-                n = len(residuals)
-                alpha = 0.05
-                chi2_lower = chi2.ppf(alpha / 2, n)
-                chi2_upper = chi2.ppf(1 - alpha / 2, n)
-                rmse_ci_lower = np.sqrt(n * mse / chi2_upper)
-                rmse_ci_upper = np.sqrt(n * mse / chi2_lower)
-                self.rmse_ci = (rmse_ci_lower, rmse_ci_upper)
+                # 95% confidence intervals for CdA and Crr using Jacobian
+                delta_cda = 1e-4
+                delta_crr = 1e-5
+
+                ve_plus = self.ve_calculator.calculate_ve(
+                    self.current_cda + delta_cda, self.current_crr
+                )[:min_len]
+                ve_minus = self.ve_calculator.calculate_ve(
+                    self.current_cda - delta_cda, self.current_crr
+                )[:min_len]
+                if trim_start_idx < min_len:
+                    offset_plus = elev_trim[trim_start_idx] - ve_plus[trim_start_idx]
+                    offset_minus = elev_trim[trim_start_idx] - ve_minus[trim_start_idx]
+                    ve_plus = ve_plus + offset_plus
+                    ve_minus = ve_minus + offset_minus
+                d_cda = (ve_plus[trim_indices] - ve_minus[trim_indices]) / (
+                    2 * delta_cda
+                )
+
+                ve_plus = self.ve_calculator.calculate_ve(
+                    self.current_cda, self.current_crr + delta_crr
+                )[:min_len]
+                ve_minus = self.ve_calculator.calculate_ve(
+                    self.current_cda, self.current_crr - delta_crr
+                )[:min_len]
+                if trim_start_idx < min_len:
+                    offset_plus = elev_trim[trim_start_idx] - ve_plus[trim_start_idx]
+                    offset_minus = elev_trim[trim_start_idx] - ve_minus[trim_start_idx]
+                    ve_plus = ve_plus + offset_plus
+                    ve_minus = ve_minus + offset_minus
+                d_crr = (ve_plus[trim_indices] - ve_minus[trim_indices]) / (
+                    2 * delta_crr
+                )
+
+                J = np.column_stack((d_cda, d_crr))
+                try:
+                    cov = (self.rmse**2) * np.linalg.inv(J.T @ J)
+                    se = np.sqrt(np.diag(cov))
+                    self.cda_ci = (
+                        self.current_cda - 1.96 * se[0],
+                        self.current_cda + 1.96 * se[0],
+                    )
+                    self.crr_ci = (
+                        self.current_crr - 1.96 * se[1],
+                        self.current_crr + 1.96 * se[1],
+                    )
+                except np.linalg.LinAlgError:
+                    self.cda_ci = (self.current_cda, self.current_cda)
+                    self.crr_ci = (self.current_crr, self.current_crr)
 
                 # Calculate elevation gain (difference between end and start)
                 # Make sure we don't exceed array bounds
@@ -153,13 +194,15 @@ class VEWorker(AsyncWorker):
             else:
                 self.r2 = 0
                 self.rmse = 0
-                self.rmse_ci = (0, 0)
+                self.cda_ci = (self.current_cda, self.current_cda)
+                self.crr_ci = (self.current_crr, self.current_crr)
                 self.ve_elevation_diff = 0
                 self.actual_elevation_diff = 0
         else:
             # If no actual elevation data, still create a calibrated version
             self.virtual_elevation_calibrated = self.virtual_elevation.copy()
-            self.rmse_ci = (0, 0)
+            self.cda_ci = (self.current_cda, self.current_cda)
+            self.crr_ci = (self.current_crr, self.current_crr)
             self.ve_elevation_diff = (
                 self.virtual_elevation_calibrated[
                     min(self.trim_end, len(self.virtual_elevation_calibrated) - 1)
@@ -365,7 +408,11 @@ class VEWorker(AsyncWorker):
 
         # Add text with CdA and Crr values - positioned completely outside plot area
         cda_str = f"CdA: {self.current_cda:.3f}"
+        if hasattr(self, "cda_ci"):
+            cda_str += f" (95% CI: {self.cda_ci[0]:.3f}-{self.cda_ci[1]:.3f})"
         crr_str = f"Crr: {self.current_crr:.4f}"
+        if hasattr(self, "crr_ci"):
+            crr_str += f" (95% CI: {self.crr_ci[0]:.4f}-{self.crr_ci[1]:.4f})"
         fig.text(
             0.01,
             0.99,
@@ -379,12 +426,7 @@ class VEWorker(AsyncWorker):
         # Add R², RMSE and elevation gain if calculated
         if hasattr(self, "r2") and hasattr(self, "rmse"):
             r2_str = f"R²: {self.r2:.3f}"
-            if hasattr(self, "rmse_ci"):
-                rmse_str = (
-                    f"RMSE: {self.rmse:.3f} m (95% CI: {self.rmse_ci[0]:.3f}-{self.rmse_ci[1]:.3f} m)"
-                )
-            else:
-                rmse_str = f"RMSE: {self.rmse:.3f} m"
+            rmse_str = f"RMSE: {self.rmse:.3f} m"
 
             # Add elevation gain differences
             if hasattr(self, "ve_elevation_diff") and hasattr(
@@ -792,9 +834,12 @@ class AnalysisResult(QMainWindow):
 
         if hasattr(self, "rmse"):
             result_row["rmse"] = self.rmse
-        if hasattr(self, "rmse_ci"):
-            result_row["rmse_ci_lower"] = self.rmse_ci[0]
-            result_row["rmse_ci_upper"] = self.rmse_ci[1]
+        if hasattr(self, "cda_ci"):
+            result_row["cda_ci_lower"] = self.cda_ci[0]
+            result_row["cda_ci_upper"] = self.cda_ci[1]
+        if hasattr(self, "crr_ci"):
+            result_row["crr_ci_lower"] = self.crr_ci[0]
+            result_row["crr_ci_upper"] = self.crr_ci[1]
 
         # Save to CSV
         header = list(result_row.keys())
